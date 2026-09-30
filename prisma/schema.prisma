@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider  = "postgresql"
+}
+
+enum DeviceType {
+  PC
+  MOBILE
+}
+
+model User {
+  id           String    @id // Supabase Auth の UID
+  name         String?   @db.VarChar(15)
+  image        String?
+  country      String?   @db.VarChar(50)
+  isProfileSet Boolean   @default(false)
+  playCount    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  rankings     Ranking[]
+  gamePlays    GamePlay[]
+}
+
+model Ranking {
+  id            String     @id @default(uuid())
+  userId        String
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceType    DeviceType
+  clearCount    Int
+  remainingTime Float
+  averageTime   Float
+  medianTime    Float
+  rawReactions  Json
+  isVerified    Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@unique([userId, deviceType])
+  @@index([deviceType, clearCount(sort: Desc), remainingTime(sort: Desc)])
+}
+
+model GamePlay {
+  id         String      @id @default(uuid())
+  userId     String?
+  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  deviceType DeviceType?
+  createdAt  DateTime    @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+}
