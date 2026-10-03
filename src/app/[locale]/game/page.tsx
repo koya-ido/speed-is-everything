@@ -1,8 +1,7 @@
 import { GameCanvas } from "@/features/game";
 
-const GamePage = (_props?: { params?: Promise<{ locale?: string }> }) => {
+const GamePage = () => {
   return <GameCanvas />;
 };
 
 export default GamePage;
-

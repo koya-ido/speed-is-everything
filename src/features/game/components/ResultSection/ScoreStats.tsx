@@ -1,13 +1,13 @@
 import { DeviceType, getReactionRank } from "@/features/game/utils/thresholds";
 import { useTranslations } from "next-intl";
 
-interface ScoreStatsProps {
+type ScoreStatsProps = {
   clearCount: number;
   remainingTime: number;
   average: number;
   median: number;
   deviceType?: DeviceType;
-}
+};
 
 export const ScoreStats = ({
   clearCount,

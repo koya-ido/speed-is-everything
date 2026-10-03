@@ -37,7 +37,7 @@ export const RankingClient = ({
 
   useEffect(() => {
     if (initialDeviceType === "PC" && getDeviceType() === "MOBILE") {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- SSR判定(PC)とブラウザのタッチデバイス検出(MOBILE)の不一致をクライアントマウント時に補正するため
       setDeviceType("MOBILE");
     }
   }, [initialDeviceType]);

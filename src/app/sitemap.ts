@@ -7,7 +7,7 @@ const host =
     ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
     : "http://localhost:3000");
 
-export default function sitemap(): MetadataRoute.Sitemap {
+const sitemap = (): MetadataRoute.Sitemap => {
   const defaultLocale = routing.defaultLocale;
   const locales = routing.locales;
 
@@ -33,4 +33,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
   });
 
   return sitemapEntries;
-}
+};
+
+export default sitemap;

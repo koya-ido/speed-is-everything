@@ -47,7 +47,7 @@ const fetchClient = async <T = unknown>(
 
   try {
     data = await response.json();
-  } catch (_err) {
+  } catch {
     data = null;
   }
 

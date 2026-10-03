@@ -3,12 +3,12 @@ import { ReactNode } from "react";
 type HeadingLevel = "h1" | "h2" | "h3" | "h4";
 type HeadingVariant = "gradient" | "cyan" | "purple" | "white" | "none";
 
-export interface HeadingProps {
+export type HeadingProps = {
   as?: HeadingLevel;
   variant?: HeadingVariant;
   className?: string;
   children: ReactNode;
-}
+};
 
 export const Heading = ({
   as: Component = "h1",

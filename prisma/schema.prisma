@@ -18,12 +18,32 @@ model User {
   image        String?
   country      String?   @db.VarChar(50)
   isProfileSet Boolean   @default(false)
-  playCount    Int       @default(0)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  playCount        Int          @default(0)
+  selectedTitle    String?
+  foulCount        Int          @default(0)
+  highestPcRank    Int?
+  highestMobileRank Int?
+  battlePlayCount  Int          @default(0)
+  battleWinCount   Int          @default(0)
+  battleLoseCount  Int          @default(0)
+  battleDrawCount  Int          @default(0)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
-  rankings     Ranking[]
-  gamePlays    GamePlay[]
+  rankings         Ranking[]
+  gamePlays        GamePlay[]
+  titles           UserTitle[]
+}
+
+model UserTitle {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  titleId    String
+  unlockedAt DateTime @default(now())
+
+  @@unique([userId, titleId])
+  @@index([userId])
 }
 
 model Ranking {

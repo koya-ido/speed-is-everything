@@ -3,7 +3,18 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
 const prismaClientSingleton = () => {
-  const connectionString = process.env.DATABASE_URL;
+  const connectionString =
+    process.env.DATABASE_URL ||
+    process.env.DIRECT_URL ||
+    (process.env.NODE_ENV === "test"
+      ? "postgresql://mock:mock@localhost:5432/test"
+      : undefined);
+  if (!connectionString) {
+    throw new Error(
+      "DATABASE_URL or DIRECT_URL is not set. Please check your .env file and restart the server.",
+    );
+  }
+
   const pool = new Pool({
     connectionString,
     max: process.env.NODE_ENV === "production" ? 5 : 10,
@@ -14,12 +25,26 @@ const prismaClientSingleton = () => {
   return new PrismaClient({ adapter });
 };
 
-type PrismaClientSingleton = ReturnType<typeof prismaClientSingleton>;
+type PrismaClientSingleton = PrismaClient;
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClientSingleton | undefined;
 };
 
-export const prisma = globalForPrisma.prisma ?? prismaClientSingleton();
+const getPrismaClient = (): PrismaClientSingleton => {
+  if (!globalForPrisma.prisma) {
+    globalForPrisma.prisma = prismaClientSingleton();
+  }
+  return globalForPrisma.prisma;
+};
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+export const prisma = new Proxy({} as PrismaClientSingleton, {
+  get(_target, prop, receiver) {
+    const client = getPrismaClient();
+    const value = Reflect.get(client, prop, receiver);
+    if (typeof value === "function") {
+      return value.bind(client);
+    }
+    return value;
+  },
+});

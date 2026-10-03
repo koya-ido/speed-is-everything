@@ -47,6 +47,12 @@ describe("gameLogic", () => {
       expect(decodedText).toContain("中央値: 245.0ms");
       expect(decodedText).toContain("部門: PC");
       expect(decodedText).toContain("#SpeedIsEverything");
+
+      const shareUrlParam = decodeURIComponent(url.split("&url=")[1]);
+      expect(shareUrlParam).toContain("/share?c=5");
+      expect(shareUrlParam).toContain("r=1200.5");
+      expect(shareUrlParam).toContain("avg=250.1");
+      expect(shareUrlParam).toContain("med=245.0");
     });
   });
 });

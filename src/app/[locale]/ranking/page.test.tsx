@@ -68,9 +68,7 @@ describe("RankingPage Server Component", () => {
       auth: { getUser: () => Promise.resolve({ data: { user: null } }) },
     } as unknown as Awaited<ReturnType<typeof createClient>>);
 
-    const jsx = await RankingPage({
-      params: Promise.resolve({ locale: "ja" }),
-    });
+    const jsx = await RankingPage();
     render(jsx);
 
     expect(screen.getByTestId("ranking-login-required")).toBeInTheDocument();
@@ -103,15 +101,11 @@ describe("RankingPage Server Component", () => {
       isProfileSet: true,
     } as unknown as Awaited<ReturnType<typeof prisma.user.findUnique>>);
 
-    const jsx = await RankingPage({
-      params: Promise.resolve({ locale: "ja" }),
-    });
+    const jsx = await RankingPage();
     render(jsx);
 
     expect(screen.getByTestId("ranking-client")).toBeInTheDocument();
-    expect(
-      screen.getByText("RankingClient for u1 (PC)"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("RankingClient for u1 (PC)")).toBeInTheDocument();
   });
 
   it("renders RankingClient with MOBILE when user is authenticated and on mobile device", async () => {
@@ -133,9 +127,7 @@ describe("RankingPage Server Component", () => {
       }),
     );
 
-    const jsx = await RankingPage({
-      params: Promise.resolve({ locale: "ja" }),
-    });
+    const jsx = await RankingPage();
     render(jsx);
 
     expect(screen.getByTestId("ranking-client")).toBeInTheDocument();

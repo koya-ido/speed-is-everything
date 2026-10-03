@@ -19,10 +19,19 @@ vi.mock("@/lib/prisma", () => ({
     ranking: {
       findUnique: vi.fn(),
       upsert: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
     },
     user: {
-      update: vi.fn(),
-      upsert: vi.fn(),
+      update: vi
+        .fn()
+        .mockResolvedValue({ id: "user-1", playCount: 1, foulCount: 0 }),
+      upsert: vi
+        .fn()
+        .mockResolvedValue({ id: "user-1", playCount: 1, foulCount: 0 }),
+    },
+    userTitle: {
+      findMany: vi.fn().mockResolvedValue([]),
+      createMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
   },
 }));

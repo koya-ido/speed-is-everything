@@ -2,13 +2,13 @@
 
 import { ReactNode, useEffect, useRef, useState } from "react";
 
-export interface DropdownProps {
+export type DropdownProps = {
   trigger: ReactNode;
   children: ReactNode;
   align?: "left" | "right" | "top";
   className?: string;
   fullWidth?: boolean;
-}
+};
 
 export const Dropdown = ({
   trigger,

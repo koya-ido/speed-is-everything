@@ -6,7 +6,7 @@ const host =
     ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
     : "http://localhost:3000");
 
-export default function robots(): MetadataRoute.Robots {
+const robots = (): MetadataRoute.Robots => {
   return {
     rules: {
       userAgent: "*",
@@ -15,4 +15,6 @@ export default function robots(): MetadataRoute.Robots {
     },
     sitemap: `${host}/sitemap.xml`,
   };
-}
+};
+
+export default robots;

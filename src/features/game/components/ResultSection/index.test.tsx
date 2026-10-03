@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 // Mock next-intl
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
+  useLocale: () => "ja",
 }));
 
 // Mock routing

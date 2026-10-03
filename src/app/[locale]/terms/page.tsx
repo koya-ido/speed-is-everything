@@ -1,4 +1,3 @@
-/* eslint-disable react/no-unescaped-entities */
 import { Header } from "@/components/Header";
 import { Heading } from "@/components/Heading";
 import { getTranslations } from "next-intl/server";
@@ -85,6 +84,26 @@ const TermsPage = async (props: { params: Promise<{ locale: string }> }) => {
               <p>
                 運営者は、必要と判断した場合には、ユーザーに通知することなくいつでも本規約を変更することができるものとします。
               </p>
+
+              <Heading
+                as="h2"
+                variant="none"
+                className="!text-xl text-white font-bold border-b border-gray-700 pb-2 mt-8"
+              >
+                6. 音源・効果音の権利表記
+              </Heading>
+              <p>
+                本サービス内で使用しているBGMおよび効果音素材は、
+                <a
+                  href="https://otologic.jp"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#00f3ff] hover:underline"
+                >
+                  OtoLogic
+                </a>
+                （クリエイティブ・コモンズ 表示 4.0 国際 ライセンス / CC BY 4.0）より提供されている素材を使用しています。
+              </p>
             </>
           ) : (
             <>
@@ -96,8 +115,8 @@ const TermsPage = async (props: { params: Promise<{ locale: string }> }) => {
                 1. Introduction
               </Heading>
               <p>
-                These Terms of Service govern your use of "SPEED IS EVERYTHING"
-                (the "Service"). By using the Service, you agree to these terms.
+                These Terms of Service govern your use of &quot;SPEED IS EVERYTHING&quot;
+                (the &quot;Service&quot;). By using the Service, you agree to these terms.
               </p>
 
               <Heading
@@ -130,7 +149,7 @@ const TermsPage = async (props: { params: Promise<{ locale: string }> }) => {
                   or gameplay.
                 </li>
                 <li>
-                  Imposing an unreasonable load on the Service's infrastructure
+                  Imposing an unreasonable load on the Service&apos;s infrastructure
                   or network.
                 </li>
                 <li>
@@ -148,7 +167,7 @@ const TermsPage = async (props: { params: Promise<{ locale: string }> }) => {
                 4. Disclaimer of Warranties
               </Heading>
               <p>
-                The Service is provided "as is" without any warranties of any
+                The Service is provided &quot;as is&quot; without any warranties of any
                 kind. The operators shall not be liable for any damages arising
                 out of or in connection with the use of the Service.
               </p>
@@ -163,6 +182,28 @@ const TermsPage = async (props: { params: Promise<{ locale: string }> }) => {
               <p>
                 We reserve the right to modify these Terms at any time without
                 prior notice.
+              </p>
+
+              <Heading
+                as="h2"
+                variant="none"
+                className="!text-xl text-white font-bold border-b border-gray-700 pb-2 mt-8"
+              >
+                6. Audio Credits
+              </Heading>
+              <p>
+                The BGM and sound effect assets used in the Service are provided
+                by{" "}
+                <a
+                  href="https://otologic.jp"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#00f3ff] hover:underline"
+                >
+                  OtoLogic
+                </a>{" "}
+                under the Creative Commons Attribution 4.0 International License
+                (CC BY 4.0).
               </p>
             </>
           )}

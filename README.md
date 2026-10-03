@@ -1,67 +1,78 @@
 # Speed is Everything
 
-最新のフロントエンド・バックエンド技術を用いて構築された、スピードとレスポンスに特化したモダンなWebアプリケーションです。
+反射神経を測定するブラウザゲームです。シングルモードとリアルタイム1対1バトルを備え、ログインするとスコアやプレイデータを記録し、ランキングに参加できます。日本語と英語に対応しています。
+
+## 主な機能
+
+- 反射神経を試すシングルモード
+- ルームを作成・参加して遊ぶリアルタイム1対1バトル
+- PC・モバイル別のランキングとスコア詳細
+- Supabase認証、プロフィール、プレイデータの記録
+- 日本語・英語の表示
 
 ## 技術スタック
 
-- **フレームワーク**: [Next.js](https://nextjs.org/) (App Router)
-- **UI / スタイリング**: [React](https://react.dev/) 19 & [Tailwind CSS](https://tailwindcss.com/) v4
-- **データベース / ORM**: [Prisma](https://www.prisma.io/) (PostgreSQLアダプター)
-- **認証 & バックエンド**: [Supabase](https://supabase.com/)
-- **多言語対応**: [next-intl](https://next-intl-docs.vercel.app/)
-- **テスト**:
-  - ユニットテスト: [Vitest](https://vitest.dev/) & [React Testing Library](https://testing-library.com/docs/react-testing-library/intro/)
-  - E2Eテスト: [Playwright](https://playwright.dev/)
+- **フレームワーク**: Next.js 16 (App Router)
+- **UI / スタイリング**: React 19、Tailwind CSS 4
+- **データベース / ORM**: PostgreSQL、Prisma ORM 7 (`@prisma/adapter-pg`)
+- **認証**: Supabase Auth (`@supabase/ssr`)
+- **多言語対応**: next-intl 4
+- **テスト**: Vitest、React Testing Library、Playwright
 
-## 前提条件
+## 必要な環境
 
-- [Node.js](https://nodejs.org/) (v20+)
-- npm, yarn, pnpm, または bun
-- PostgreSQL データベース (または Supabase プロジェクト)
+- [Node.js](https://nodejs.org/) 20.9.0以上
+- npm
+- PostgreSQLデータベース
+- Supabaseプロジェクト（認証機能を利用する場合）
 
-## 始め方
+## セットアップ
 
-1. **リポジトリのクローン:**
+1. リポジトリを取得して依存関係をインストールします。
+
    ```bash
    git clone git@github.com:koya-ido/speed-is-everything.git
    cd speed-is-everything
-   ```
-
-2. **依存関係のインストール:**
-   ```bash
    npm install
    ```
 
-3. **環境変数の設定:**
-   `.env.example` をコピーして `.env` を作成し、必要な設定値（SupabaseのURLやデータベースURLなど）を入力します。
-   ```bash
-   cp .env.example .env
+2. プロジェクトルートに `.env` ファイルを作成し、次の値を設定します。`.env.example` はリポジトリに含まれていません。値は各サービスの設定から取得してください。
+
+   ```dotenv
+   DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DATABASE?schema=public"
+   DIRECT_URL="postgresql://USER:PASSWORD@HOST:5432/DATABASE?schema=public"
+   NEXT_PUBLIC_SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
+   NEXT_PUBLIC_SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY"
+   GAME_JWT_SECRET="ランダムな長い秘密鍵"
    ```
 
-4. **データベースのセットアップ:**
-   Prismaのマイグレーションを実行して、データベーススキーマを初期化します。
+   `DATABASE_URL` または `DIRECT_URL` のいずれかが必要です。接続方式に応じて設定してください。Prisma CLIは `DIRECT_URL` が設定されている場合、そちらを優先します。`NEXT_PUBLIC_APP_URL` はサイトの公開URLを明示する場合のみ設定します。秘密鍵や接続文字列を公開リポジトリへコミットしないでください。
+
+3. PostgreSQLにスキーマを反映し、Prisma Clientを生成します。
+
    ```bash
    npx prisma db push
-   # または
-   npx prisma migrate dev
+   npx prisma generate
    ```
 
-5. **開発サーバーの起動:**
+4. 開発サーバーを起動します。
+
    ```bash
    npm run dev
    ```
-   ブラウザで [http://localhost:3000](http://localhost:3000) にアクセスすると、アプリケーションを確認できます。
+
+   [http://localhost:3000/ja](http://localhost:3000/ja) または [http://localhost:3000/en](http://localhost:3000/en) を開きます。
 
 ## スクリプト一覧
 
 - `npm run dev`: 開発サーバーを起動します。
-- `npm run build`: 本番用のアプリをビルドします。
-- `npm run start`: 本番用サーバーを起動します。
-- `npm run lint`: ESLintを実行してコードの問題をチェックします。
-- `npm run test`: Vitestを使用してユニットテストを実行します。
-- `npm run test:e2e`: Playwrightを使用してE2Eテストを実行します。
-- `npm run test:e2e:ui`: PlaywrightのUIモードを使用してE2Eテストを実行します。
+- `npm run build`: Prisma Clientを生成して本番ビルドを作成します。
+- `npm run start`: 本番ビルドを起動します。
+- `npm run lint`: ESLintを実行します。
+- `npm run test`: Vitestでユニットテストを実行します。
+- `npm run test:e2e`: PlaywrightでE2Eテストを実行します。初回は `npx playwright install` でブラウザーをインストールしてください。
+- `npm run test:e2e:ui`: PlaywrightのUIモードでE2Eテストを実行します。
 
 ## ライセンス
 
-このプロジェクトは非公開のプロプライエタリ・ソフトウェアです。(Private and proprietary)
+非公開のプロプライエタリ・ソフトウェアです。(Private and proprietary)

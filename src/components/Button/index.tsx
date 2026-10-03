@@ -10,11 +10,11 @@ type ButtonVariant =
   | "success-solid";
 type ButtonSize = "sm" | "md" | "lg" | "none";
 
-export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant;
   size?: ButtonSize;
   children: ReactNode;
-}
+};
 
 export const Button = ({
   variant = "primary",

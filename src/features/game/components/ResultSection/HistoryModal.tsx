@@ -3,10 +3,10 @@ import { Heading } from "@/components/Heading";
 import { calculateRemainingTime } from "@/features/game/utils/stats";
 import { DeviceType, getReactionRank } from "@/features/game/utils/thresholds";
 import { useTranslations } from "next-intl";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 
-interface HistoryModalProps {
+type HistoryModalProps = {
   isOpen: boolean;
   onClose: () => void;
   rawReactions: number[];
@@ -14,7 +14,9 @@ interface HistoryModalProps {
   failureType: "FALSE_START" | "TOO_FAST" | "TIME_OVER" | "TAB_LEAVE" | null;
   failedReaction: number | null;
   deviceType?: DeviceType;
-}
+};
+
+const emptySubscribe = () => () => { };
 
 export const HistoryModal = ({
   isOpen,
@@ -26,12 +28,7 @@ export const HistoryModal = ({
   deviceType = "PC",
 }: HistoryModalProps) => {
   const t = useTranslations("ResultSection");
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMounted(true);
-  }, []);
+  const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
 
   if (!isOpen || !mounted) return null;
 

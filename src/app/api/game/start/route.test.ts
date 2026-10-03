@@ -74,16 +74,9 @@ describe("POST /api/game/start", () => {
         getUser: () => Promise.resolve({ data: { user: { id: "user-xyz" } } }),
       },
     } as unknown as Awaited<ReturnType<typeof createClient>>);
-    vi.mocked(prisma.user.findUnique).mockResolvedValue({ id: "user-xyz" } as unknown as {
-      id: string;
-      name: string | null;
-      image: string | null;
-      country: string | null;
-      isProfileSet: boolean;
-      playCount: number;
-      createdAt: Date;
-      updatedAt: Date;
-    });
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      id: "user-xyz",
+    } as unknown as Awaited<ReturnType<typeof prisma.user.findUnique>>);
     vi.mocked(signGameToken).mockResolvedValue("mock-user-token");
 
     const req = new Request("http://localhost", {

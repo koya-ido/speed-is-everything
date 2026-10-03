@@ -1,5 +1,6 @@
 import { Button } from "@/components/Button";
 import { RankingEntry } from "@/features/ranking/types";
+import { TitleBadge } from "@/features/title";
 import { Avatar, CountryFlag } from "@/features/user";
 import { useTranslations } from "next-intl";
 
@@ -108,6 +109,13 @@ export const RankingTable = ({
                         >
                           {r.user.name}
                         </span>
+                        {r.user.selectedTitle && (
+                          <TitleBadge
+                            titleId={r.user.selectedTitle}
+                            size="sm"
+                            className="hidden lg:inline-flex"
+                          />
+                        )}
                       </div>
                     </td>
                     <td className="px-1 py-2 md:p-4 text-right font-black text-sm sm:text-base md:text-2xl text-[#00f3ff] drop-shadow-[0_0_5px_rgba(0,243,255,0.3)]">

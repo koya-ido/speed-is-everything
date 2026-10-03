@@ -53,7 +53,7 @@ describe("GameCanvas", () => {
       rafCallbacks.push(cb);
       return rafCallbacks.length;
     });
-    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => { });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
     vi.spyOn(performance, "now").mockImplementation(() => perfTime);
 
     (global.fetch as import("vitest").Mock).mockResolvedValue({
@@ -68,11 +68,47 @@ describe("GameCanvas", () => {
     vi.restoreAllMocks();
   });
 
+  it("shows 3, 2, 1 countdown before transitioning to waiting and ignores clicks during countdown", async () => {
+    render(<GameCanvas />);
+
+    await act(async () => {
+      fireEvent.pointerDown(screen.getByText("state_start"));
+    });
+
+    expect(screen.getByText("READY")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByText("2")).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByText("1")).toBeInTheDocument();
+
+    // Clicking during countdown is ignored
+    await act(async () => {
+      fireEvent.pointerDown(screen.getByText("READY"));
+    });
+    expect(screen.queryByTestId("mock-result-section")).not.toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByText("state_waiting")).toBeInTheDocument();
+  });
+
   it("starts game and handles FALSE_START", async () => {
     render(<GameCanvas />);
 
     await act(async () => {
       fireEvent.pointerDown(screen.getByText("state_start"));
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
     });
 
     await act(async () => {
@@ -88,6 +124,10 @@ describe("GameCanvas", () => {
 
     await act(async () => {
       fireEvent.pointerDown(screen.getByText("state_start"));
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
     });
 
     await act(async () => {
@@ -126,6 +166,10 @@ describe("GameCanvas", () => {
     });
 
     await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    await act(async () => {
       perfTime = 2000;
       vi.advanceTimersByTime(2000);
     });
@@ -149,13 +193,17 @@ describe("GameCanvas", () => {
     expect(screen.getByText("-170.0ms")).toBeInTheDocument();
   });
 
-  it("triggers Godlike! popup on Mobile for reaction < 250ms", async () => {
+  it("triggers Godlike! popup on Mobile for reaction < 180ms", async () => {
     render(<GameCanvas />);
 
     await act(async () => {
       fireEvent.pointerUp(screen.getByText("state_start"), {
         pointerType: "touch",
       });
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
     });
 
     await act(async () => {
@@ -172,24 +220,28 @@ describe("GameCanvas", () => {
     expect(screen.getByText("state_action")).toBeInTheDocument();
 
     await act(async () => {
-      perfTime = 2240;
-      vi.advanceTimersByTime(240);
+      perfTime = 2170;
+      vi.advanceTimersByTime(170);
       const el = screen.getByText("state_action");
       fireEvent.pointerUp(el, { pointerType: "touch" });
     });
 
-    // 240ms on mobile: < 250ms so it should be Godlike!
+    // 170ms on mobile: < 180ms so it should be Godlike!
     expect(screen.getByText("Godlike!")).toBeInTheDocument();
-    expect(screen.getByText("-240.0ms")).toBeInTheDocument();
+    expect(screen.getByText("-170.0ms")).toBeInTheDocument();
   });
 
-  it("triggers Excellent! popup on Mobile for 250ms - 269ms", async () => {
+  it("triggers Excellent! popup on Mobile for 180ms - 199ms", async () => {
     render(<GameCanvas />);
 
     await act(async () => {
       fireEvent.pointerUp(screen.getByText("state_start"), {
         pointerType: "touch",
       });
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
     });
 
     await act(async () => {
@@ -206,14 +258,14 @@ describe("GameCanvas", () => {
     expect(screen.getByText("state_action")).toBeInTheDocument();
 
     await act(async () => {
-      perfTime = 2260;
-      vi.advanceTimersByTime(260);
+      perfTime = 2190;
+      vi.advanceTimersByTime(190);
       const el = screen.getByText("state_action");
       fireEvent.pointerUp(el, { pointerType: "touch" });
     });
 
-    // 260ms on mobile: >= 250ms and < 270ms so it should be Excellent!
+    // 190ms on mobile: >= 180ms and < 200ms so it should be Excellent!
     expect(screen.getByText("Excellent!")).toBeInTheDocument();
-    expect(screen.getByText("-260.0ms")).toBeInTheDocument();
+    expect(screen.getByText("-190.0ms")).toBeInTheDocument();
   });
 });

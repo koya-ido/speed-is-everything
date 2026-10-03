@@ -6,8 +6,8 @@ export const REACTION_THRESHOLDS = {
     EXCELLENT: 200,
   },
   MOBILE: {
-    GODLIKE: 250,
-    EXCELLENT: 270,
+    GODLIKE: 180,
+    EXCELLENT: 200,
   },
 } as const;
 

@@ -1,12 +1,16 @@
 import { ScoreStats } from "@/features/game/components/ResultSection/ScoreStats";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }));
 
 describe("ScoreStats", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   it("applies PC threshold colors correctly", () => {
     // 175ms is Godlike on PC (< 180)
     const { rerender } = render(
@@ -41,22 +45,34 @@ describe("ScoreStats", () => {
   });
 
   it("applies Mobile threshold colors correctly", () => {
-    // On Mobile: Godlike < 250, Excellent 250 - 269, Normal >= 270
-    // 240.4ms should be Godlike (#ffd700) on Mobile, but white on PC!
-    render(
+    // On Mobile: Godlike < 180, Excellent 180 - 199, Normal >= 200
+    const { rerender } = render(
       <ScoreStats
         clearCount={10}
         remainingTime={500}
-        average={240.4}
-        median={260.0}
+        average={170}
+        median={190}
         deviceType="MOBILE"
       />,
     );
 
-    const avgEl = screen.getByText("240.4 unit_ms");
+    const avgEl = screen.getByText("170.0 unit_ms");
     expect(avgEl.className).toContain("text-[#ffd700]");
 
-    const medianEl = screen.getByText("260.0 unit_ms");
+    const medianEl = screen.getByText("190.0 unit_ms");
     expect(medianEl.className).toContain("text-[#ff64ff]");
+
+    rerender(
+      <ScoreStats
+        clearCount={10}
+        remainingTime={500}
+        average={210}
+        median={210}
+        deviceType="MOBILE"
+      />,
+    );
+    expect(screen.getAllByText("210.0 unit_ms")[0].className).toContain(
+      "text-white",
+    );
   });
 });

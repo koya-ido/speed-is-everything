@@ -4,8 +4,9 @@ import {
   calculateFastest,
   calculateSlowest,
   getValidReactions,
-} from "@/features/game/utils/stats";
+} from "@/features/game";
 import { RankingEntry } from "@/features/ranking/types";
+import { TitleBadge } from "@/features/title";
 import { Avatar } from "@/features/user";
 import { useTranslations } from "next-intl";
 
@@ -59,8 +60,13 @@ export const RankingDetailModal = ({
             className="w-12 h-12 rounded-full border border-[#00f3ff] object-cover shrink-0"
           />
           <div>
-            <div className="font-bold text-xl">{selectedEntry.user.name}</div>
-            <div className="text-sm text-[#00f3ff] font-cyber tracking-widest">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-xl">{selectedEntry.user.name}</span>
+              {selectedEntry.user.selectedTitle && (
+                <TitleBadge titleId={selectedEntry.user.selectedTitle} size="sm" />
+              )}
+            </div>
+            <div className="text-sm text-[#00f3ff] font-cyber tracking-widest mt-0.5">
               {t("intel_rank")}:{" "}
               {rankings.findIndex((r) => r.id === selectedEntry.id) +
                 RANK_OFFSET}

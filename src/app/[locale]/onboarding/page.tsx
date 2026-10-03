@@ -8,7 +8,9 @@ import { useRouter } from "@/i18n/routing";
 import { createClient } from "@/lib/supabase/client";
 import { apiClient } from "@/utils/apiClient";
 import { useTranslations } from "next-intl";
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
+
+const emptySubscribe = () => () => { };
 
 const Onboarding = () => {
   const [name, setName] = useState("");
@@ -16,14 +18,13 @@ const Onboarding = () => {
   const [customCountry, setCustomCountry] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [hasPendingScore, setHasPendingScore] = useState(false);
+  const hasPendingScore = useSyncExternalStore(
+    emptySubscribe,
+    () => checkHasPendingScore(),
+    () => false,
+  );
   const router = useRouter();
   const t = useTranslations("Onboarding");
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setHasPendingScore(checkHasPendingScore());
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

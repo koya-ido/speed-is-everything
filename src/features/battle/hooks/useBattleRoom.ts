@@ -1,0 +1,1650 @@
+"use client";
+
+import {
+  BattlePhase,
+  BattlePlayerState,
+  BattleRoundLog,
+  DeviceWarningAcceptPayload,
+  FoulPayload,
+  InitialHpOption,
+  isReactionEmoji,
+  PresencePayload,
+  REACTION_COOLDOWN_MS,
+  REACTION_DISPLAY_MS,
+  ReactionEmoji,
+  RematchPayload,
+  RoundResolutionResult,
+  RoundStartPayload,
+  SubmitTimePayload,
+} from "@/features/battle/types";
+import {
+  checkFoul,
+  formatRoomId,
+  generateRoundDelay,
+  getBattleReactionRank,
+  resolveRound,
+} from "@/features/battle/utils/battleLogic";
+import { getDeviceType, haptics, soundManager } from "@/features/game";
+import { createClient } from "@/lib/supabase/client";
+import type { RealtimeChannel } from "@supabase/supabase-js";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+type UseBattleRoomProps = {
+  roomId: string;
+  isHost: boolean;
+  initialHp?: InitialHpOption;
+  userId?: string;
+  userName?: string;
+};
+
+export const useBattleRoom = ({
+  roomId: rawRoomId,
+  isHost: initialIsHost,
+  initialHp: requestedHp = 1500,
+  userId: initialUserId,
+  userName: initialUserName,
+}: UseBattleRoomProps) => {
+  const roomId = formatRoomId(rawRoomId);
+  const [supabase] = useState(() => createClient());
+
+  // 端末判定
+  const detectedDevice = getDeviceType() === "MOBILE" ? "mobile" : "desktop";
+
+  // 永続的なローカルID / ユーザー名の生成または維持
+  const [localUserId] = useState(() => {
+    if (initialUserId) return initialUserId;
+    if (typeof window !== "undefined") {
+      const stored = sessionStorage.getItem("battle_user_id");
+      if (stored) return stored;
+      const newId = `user_${Math.random().toString(36).substring(2, 9)}`;
+      sessionStorage.setItem("battle_user_id", newId);
+      return newId;
+    }
+    return `user_${Math.random().toString(36).substring(2, 9)}`;
+  });
+
+  const [localUserName] = useState(() => {
+    if (initialUserName) return initialUserName;
+    if (typeof window !== "undefined") {
+      const stored = sessionStorage.getItem("battle_user_name");
+      if (stored) return stored;
+    }
+    return `Agent_${localUserId.slice(-4)}`;
+  });
+
+  const [isHost, setIsHost] = useState(initialIsHost);
+  const [promotedToHost, setPromotedToHost] = useState(false);
+  const [initialHp, setInitialHp] = useState<InitialHpOption>(requestedHp);
+  const [phase, setPhase] = useState<BattlePhase>("LOBBY");
+  const [currentRound, setCurrentRound] = useState(1);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const hpTimestampRef = useRef<number>(0);
+  const sawOpponentRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (initialIsHost && hpTimestampRef.current === 0) {
+      hpTimestampRef.current = Date.now();
+    }
+  }, [initialIsHost]);
+
+  const prevInitialIsHostRef = useRef(initialIsHost);
+  useEffect(() => {
+    if (prevInitialIsHostRef.current !== initialIsHost) {
+      prevInitialIsHostRef.current = initialIsHost;
+      setIsHost(initialIsHost);
+    }
+  }, [initialIsHost]);
+
+  // プレイヤー状態
+  const [player, setPlayer] = useState<BattlePlayerState>({
+    userId: localUserId,
+    userName: initialUserName || localUserName,
+    device: detectedDevice,
+    hp: requestedHp,
+    combo: 0,
+    godlikeCombo: 0,
+    comboRank: null,
+    currentRoundTime: null,
+    currentRoundRank: null,
+    currentRoundFoul: null,
+    isReady: false,
+    isHost: initialIsHost,
+  });
+
+  useEffect(() => {
+    if (initialUserName) {
+      setPlayer((p) => ({ ...p, userName: initialUserName }));
+    }
+  }, [initialUserName]);
+
+  // 対戦相手状態
+  const [opponent, setOpponent] = useState<BattlePlayerState | null>(null);
+
+  // デバイス不一致の承諾状態
+  const [deviceWarningAcceptedByMe, setDeviceWarningAcceptedByMe] =
+    useState(false);
+  const [deviceWarningAcceptedByOpponent, setDeviceWarningAcceptedByOpponent] =
+    useState(false);
+
+  // ラウンド結果
+  const [roundResult, setRoundResult] = useState<RoundResolutionResult | null>(
+    null,
+  );
+  const [matchWinner, setMatchWinner] = useState<
+    "player" | "opponent" | "draw" | null
+  >(null);
+  const [matchFinishReason, setMatchFinishReason] = useState<
+    "hp_zero" | "foul" | "opponent_left" | "both_hp_zero" | null
+  >(null);
+  const [roundLogs, setRoundLogs] = useState<BattleRoundLog[]>([]);
+  const roundLogsRef = useRef<BattleRoundLog[]>([]);
+  const hasSentRecordRef = useRef(false);
+
+  // 再戦管理
+  const [rematchRequestedByMe, setRematchRequestedByMe] = useState(false);
+  const rematchRequestedByMeRef = useRef(false);
+  const [rematchRequestedByOpponent, setRematchRequestedByOpponent] =
+    useState(false);
+  const [opponentReturnedToLobby, setOpponentReturnedToLobby] = useState(false);
+
+  // 通信チャンネルとタイマーの参照
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const delayTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const resolveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const actionStartTimeRef = useRef<number | null>(null);
+  const hostPromotionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const evaluatedRoundRef = useRef<number | null>(null);
+
+  const recordMatchResult = (
+    finalWinner: "player" | "opponent" | "draw" | null,
+    myHp: number,
+    opponentHp: number,
+  ) => {
+    if (hasSentRecordRef.current) return;
+    hasSentRecordRef.current = true;
+
+    try {
+      const myDevice =
+        stateRef.current.player.device === "mobile" ? "MOBILE" : "PC";
+      const oppDevice =
+        stateRef.current.opponent?.device === "mobile" ? "MOBILE" : "PC";
+      const currentLogs = roundLogsRef.current || [];
+      const drawCount = currentLogs.filter((l) => l.winner === "draw").length;
+      const reactionTimes = currentLogs
+        .map((l) => l.playerTime)
+        .filter((t): t is number => typeof t === "number" && t > 0);
+      const wasUnder100 = currentLogs.some(
+        (l) => l.playerHpAfter > 0 && l.playerHpAfter < 100,
+      );
+      const isFoul = currentLogs.some((l) => l.playerFoul !== null);
+
+      fetch("/api/battle/record", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          roomId: stateRef.current.roomId,
+          result:
+            finalWinner === "player"
+              ? "win"
+              : finalWinner === "opponent"
+                ? "lose"
+                : "draw",
+          remainingHp: myHp,
+          initialHp: stateRef.current.initialHp,
+          opponentHp,
+          rounds: stateRef.current.currentRound,
+          myDevice,
+          opponentDevice: oppDevice,
+          maxGodlikeCombo: stateRef.current.player.godlikeCombo || 0,
+          maxExcellentCombo: stateRef.current.player.combo || 0,
+          wasUnder100HpBeforeWin: wasUnder100,
+          drawCountInMatch: drawCount,
+          reactionTimes,
+          isFoul,
+        }),
+      }).catch(() => {});
+    } catch {}
+  };
+
+  // 最新状態の参照用
+  const stateRef = useRef({
+    phase,
+    player,
+    opponent,
+    currentRound,
+    initialHp,
+    isHost,
+    roomId,
+  });
+
+  useEffect(() => {
+    stateRef.current = {
+      phase,
+      player,
+      opponent,
+      currentRound,
+      initialHp,
+      isHost,
+      roomId,
+    };
+  }, [phase, player, opponent, currentRound, initialHp, isHost, roomId]);
+
+  useEffect(() => {
+    roundLogsRef.current = roundLogs;
+  }, [roundLogs]);
+
+  useEffect(() => {
+    if (phase === "LOBBY" || phase === "COUNTDOWN") {
+      hasSentRecordRef.current = false;
+    }
+  }, [phase]);
+
+  // デバイス不一致チェック
+  const hasDeviceMismatch = Boolean(
+    opponent && player.device !== opponent.device,
+  );
+
+  // ラウンドタイマークリア関数
+  const clearAllTimers = useCallback(() => {
+    soundManager.stopTick();
+    if (delayTimerRef.current) clearTimeout(delayTimerRef.current);
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    if (resolveTimerRef.current) clearTimeout(resolveTimerRef.current);
+    if (hostPromotionTimerRef.current) {
+      clearTimeout(hostPromotionTimerRef.current);
+      hostPromotionTimerRef.current = null;
+    }
+  }, []);
+
+  // ホストへの昇格処理（ロビーでホスト退出時）
+  const promoteSelfToHost = useCallback(() => {
+    if (stateRef.current.isHost) return;
+    setIsHost(true);
+    setPromotedToHost(true);
+    stateRef.current.isHost = true;
+    setPlayer((p) => ({ ...p, isHost: true }));
+
+    if (channelRef.current) {
+      const payload: PresencePayload = {
+        userId: localUserId,
+        userName: localUserName,
+        device: detectedDevice,
+        isReady: true,
+        initialHp: stateRef.current.initialHp,
+        isHost: true,
+      };
+      channelRef.current.track(payload);
+    }
+  }, [detectedDevice, localUserId, localUserName]);
+
+  // 部屋退出処理（ブロードキャスト通知付き）
+  const leaveRoom = useCallback(() => {
+    if (channelRef.current) {
+      channelRef.current.send({
+        type: "broadcast",
+        event: "player_left",
+        payload: { userId: localUserId, isHost: stateRef.current.isHost },
+      });
+      channelRef.current.unsubscribe();
+      channelRef.current = null;
+    }
+    clearAllTimers();
+  }, [clearAllTimers, localUserId]);
+
+  // 1. ラウンド開始実行 (ホストから呼び出し、またはround_start受信時)
+  const startRoundWithDelay = useCallback(
+    (round: number, delay: number) => {
+      clearAllTimers();
+      setCurrentRound(round);
+      setRoundResult(null);
+      evaluatedRoundRef.current = null;
+      stateRef.current.currentRound = round;
+
+      if (round === 1) {
+        setMatchWinner(null);
+        setMatchFinishReason(null);
+        setRematchRequestedByMe(false);
+        rematchRequestedByMeRef.current = false;
+        setRematchRequestedByOpponent(false);
+        setRoundLogs([]);
+      }
+
+      // ラウンド用の一時状態をリセット
+      setPlayer((prev) => ({
+        ...prev,
+        combo: round === 1 ? 0 : prev.combo,
+        godlikeCombo: round === 1 ? 0 : prev.godlikeCombo,
+        comboRank: round === 1 ? null : prev.comboRank,
+        currentRoundTime: null,
+        currentRoundRank: null,
+        currentRoundFoul: null,
+      }));
+      setOpponent((prev) =>
+        prev
+          ? {
+              ...prev,
+              combo: round === 1 ? 0 : prev.combo,
+              godlikeCombo: round === 1 ? 0 : prev.godlikeCombo,
+              comboRank: round === 1 ? null : prev.comboRank,
+              currentRoundTime: null,
+              currentRoundRank: null,
+              currentRoundFoul: null,
+            }
+          : null,
+      );
+      stateRef.current.player = {
+        ...stateRef.current.player,
+        combo: round === 1 ? 0 : stateRef.current.player.combo,
+        godlikeCombo: round === 1 ? 0 : stateRef.current.player.godlikeCombo,
+        comboRank: round === 1 ? null : stateRef.current.player.comboRank,
+        currentRoundTime: null,
+        currentRoundRank: null,
+        currentRoundFoul: null,
+      };
+      if (stateRef.current.opponent) {
+        stateRef.current.opponent = {
+          ...stateRef.current.opponent,
+          combo: round === 1 ? 0 : stateRef.current.opponent.combo,
+          godlikeCombo:
+            round === 1 ? 0 : stateRef.current.opponent.godlikeCombo,
+          comboRank: round === 1 ? null : stateRef.current.opponent.comboRank,
+          currentRoundTime: null,
+          currentRoundRank: null,
+          currentRoundFoul: null,
+        };
+      }
+
+      // カウントダウンフェーズ (READY -> 3, 2, 1)
+      setPhase("COUNTDOWN");
+      stateRef.current.phase = "COUNTDOWN";
+      setCountdown(3);
+      soundManager.playBgm();
+      soundManager.playCountdown();
+
+      let count = 3;
+      countdownTimerRef.current = setInterval(() => {
+        count -= 1;
+        if (count > 0) {
+          setCountdown(count);
+          soundManager.playCountdown();
+        } else {
+          if (countdownTimerRef.current)
+            clearInterval(countdownTimerRef.current);
+          setCountdown(null);
+
+          // WAITINGフェーズ（赤画面）
+          setPhase("WAITING");
+          stateRef.current.phase = "WAITING";
+          actionStartTimeRef.current = null;
+
+          // 指定された delay 後に ACTION フェーズ（緑画面）へ移行
+          // GameCanvas と同一の rAF 計測起点同期と Tick サウンド
+          delayTimerRef.current = setTimeout(() => {
+            actionStartTimeRef.current = performance.now();
+            requestAnimationFrame((timestamp) => {
+              actionStartTimeRef.current = timestamp;
+            });
+            setPhase("ACTION");
+            stateRef.current.phase = "ACTION";
+            soundManager.playAction();
+            soundManager.startTick();
+            haptics.action();
+          }, delay);
+        }
+      }, 800);
+    },
+    [clearAllTimers],
+  );
+
+  // ホストが次のラウンドを開始するトリガー
+  const triggerNextRound = useCallback(
+    (roundNum: number) => {
+      const currentInitialHp = stateRef.current.initialHp;
+
+      if (roundNum === 1) {
+        setRoundLogs([]);
+        setPlayer((p) => ({
+          ...p,
+          hp: currentInitialHp,
+          combo: 0,
+          godlikeCombo: 0,
+          comboRank: null,
+        }));
+        setOpponent((o) =>
+          o
+            ? {
+                ...o,
+                hp: currentInitialHp,
+                combo: 0,
+                godlikeCombo: 0,
+                comboRank: null,
+              }
+            : null,
+        );
+        stateRef.current.player.hp = currentInitialHp;
+        stateRef.current.player.combo = 0;
+        stateRef.current.player.godlikeCombo = 0;
+        stateRef.current.player.comboRank = null;
+        stateRef.current.player.currentRoundTime = null;
+        stateRef.current.player.currentRoundRank = null;
+        stateRef.current.player.currentRoundFoul = null;
+        if (stateRef.current.opponent) {
+          stateRef.current.opponent.hp = currentInitialHp;
+          stateRef.current.opponent.combo = 0;
+          stateRef.current.opponent.godlikeCombo = 0;
+          stateRef.current.opponent.comboRank = null;
+          stateRef.current.opponent.currentRoundTime = null;
+          stateRef.current.opponent.currentRoundRank = null;
+          stateRef.current.opponent.currentRoundFoul = null;
+        }
+      } else {
+        // roundNum > 1 の時のみ、どちらかのHPが0以下の場合は試合終了にする
+        const currentPlayerHp = stateRef.current.player.hp;
+        const currentOpponentHp = stateRef.current.opponent?.hp ?? 1000;
+        if (currentPlayerHp <= 0 || currentOpponentHp <= 0) {
+          const winner =
+            currentPlayerHp <= 0 && currentOpponentHp <= 0
+              ? "draw"
+              : currentPlayerHp <= 0
+                ? "opponent"
+                : "player";
+          setPhase("MATCH_FINISHED");
+          setMatchWinner(winner);
+          setMatchFinishReason("hp_zero");
+          if (channelRef.current) {
+            channelRef.current.send({
+              type: "broadcast",
+              event: "match_finished",
+              payload: {
+                winner,
+                reason: "hp_zero",
+                playerHp: currentPlayerHp,
+                opponentHp: currentOpponentHp,
+              },
+            });
+          }
+          return;
+        }
+      }
+
+      const delay = generateRoundDelay();
+      const hostState = stateRef.current.player;
+      const guestState = stateRef.current.opponent;
+      const payload: RoundStartPayload = {
+        round: roundNum,
+        delay,
+        initialHp: currentInitialHp,
+        hostState: {
+          hp: hostState.hp,
+          combo: hostState.combo,
+          godlikeCombo: hostState.godlikeCombo,
+          comboRank: hostState.comboRank ?? null,
+        },
+        guestState: {
+          hp: guestState?.hp ?? currentInitialHp,
+          combo: guestState?.combo ?? 0,
+          godlikeCombo: guestState?.godlikeCombo ?? 0,
+          comboRank: guestState?.comboRank ?? null,
+        },
+      };
+
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: "broadcast",
+          event: "round_start",
+          payload,
+        });
+      }
+
+      startRoundWithDelay(roundNum, delay);
+    },
+    [startRoundWithDelay],
+  );
+
+  // 両者のタイム確定時のラウンド結果処理
+  const evaluateRoundIfReady = useCallback(
+    (pState: BattlePlayerState, oState: BattlePlayerState) => {
+      const pFinished =
+        pState.currentRoundTime !== null || pState.currentRoundFoul !== null;
+      const oFinished =
+        oState.currentRoundTime !== null || oState.currentRoundFoul !== null;
+
+      if (!pFinished || !oFinished) {
+        return;
+      }
+
+      // 同一ラウンドでの多重評価を厳密に遮断
+      if (evaluatedRoundRef.current === stateRef.current.currentRound) {
+        return;
+      }
+      if (
+        stateRef.current.phase === "RESOLVING" ||
+        stateRef.current.phase === "MATCH_FINISHED"
+      ) {
+        return;
+      }
+      evaluatedRoundRef.current = stateRef.current.currentRound;
+
+      setPhase("RESOLVING");
+      const res = resolveRound(pState, oState);
+      setRoundResult(res);
+
+      // バトルログ記録
+      const logEntry: BattleRoundLog = {
+        round: stateRef.current.currentRound,
+        winner: res.winner || "draw",
+        playerTime: pState.currentRoundTime,
+        playerRank: pState.currentRoundRank,
+        playerFoul: pState.currentRoundFoul,
+        playerComboBefore: pState.combo,
+        playerGodlikeComboBefore: pState.godlikeCombo,
+        opponentTime: oState.currentRoundTime,
+        opponentRank: oState.currentRoundRank,
+        opponentFoul: oState.currentRoundFoul,
+        opponentComboBefore: oState.combo,
+        opponentGodlikeComboBefore: oState.godlikeCombo,
+        damage:
+          res.winner === "player"
+            ? res.opponentDamageTaken
+            : res.winner === "opponent"
+              ? res.playerDamageTaken
+              : 0,
+        appliedRankMult: res.appliedRankMult ?? 1.0,
+        appliedComboMult: res.appliedComboMult ?? 1.0,
+        appliedBonusType: res.appliedBonusType ?? null,
+        playerHpAfter: res.playerNewHp,
+        opponentHpAfter: res.opponentNewHp,
+      };
+
+      setRoundLogs((prev) => {
+        if (prev.some((l) => l.round === logEntry.round)) {
+          return prev;
+        }
+        return [...prev, logEntry];
+      });
+
+      // ダメージ計算アニメーションの合計時間に合わせて動的に待機時間を設定
+      let resolveDelay = 5200;
+      if (
+        res.winner === "draw" ||
+        pState.currentRoundFoul ||
+        oState.currentRoundFoul
+      ) {
+        resolveDelay = 2500;
+      } else {
+        const hasRank = (res.appliedRankMult ?? 1.0) > 1.0;
+        const hasCombo = (res.appliedComboMult ?? 1.0) > 1.0;
+        if (hasRank && hasCombo) {
+          resolveDelay = 9800; // 1s + 1s + 1.5s + 1s + 1.5s + 1s + 1.5s + 0.5s + 0.8s余韻
+        } else if (hasRank || hasCombo) {
+          resolveDelay = 7800; // 1s + 1s + 1.5s + 1s + 1.5s + 0.5s + 0.8s余韻
+        } else {
+          resolveDelay = 5200; // 1s + 1s + 1.5s + 0.5s + 1.2s余韻
+        }
+      }
+
+      // 演出時間完了後に新HP/コンボを確定反映して次へ進む
+      resolveTimerRef.current = setTimeout(() => {
+        // 演出完了時に初めてHPとコンボを正式反映（アニメーション中の増減チラつきを完全防止）
+        setPlayer((prev) => ({
+          ...prev,
+          hp: res.playerNewHp,
+          combo: res.playerNewCombo,
+          godlikeCombo: res.playerNewGodlikeCombo,
+          comboRank: res.playerNewComboRank ?? null,
+        }));
+        setOpponent((prev) =>
+          prev
+            ? {
+                ...prev,
+                hp: res.opponentNewHp,
+                combo: res.opponentNewCombo,
+                godlikeCombo: res.opponentNewGodlikeCombo,
+                comboRank: res.opponentNewComboRank ?? null,
+              }
+            : null,
+        );
+        stateRef.current.player = {
+          ...stateRef.current.player,
+          hp: res.playerNewHp,
+          combo: res.playerNewCombo,
+          godlikeCombo: res.playerNewGodlikeCombo,
+          comboRank: res.playerNewComboRank ?? null,
+        };
+        if (stateRef.current.opponent) {
+          stateRef.current.opponent = {
+            ...stateRef.current.opponent,
+            hp: res.opponentNewHp,
+            combo: res.opponentNewCombo,
+            godlikeCombo: res.opponentNewGodlikeCombo,
+            comboRank: res.opponentNewComboRank ?? null,
+          };
+        }
+
+        const isHpExhausted =
+          res.matchOver ||
+          res.playerNewHp <= 0 ||
+          res.opponentNewHp <= 0 ||
+          stateRef.current.player.hp <= 0 ||
+          (stateRef.current.opponent?.hp ?? 1000) <= 0;
+
+        if (isHpExhausted) {
+          const finalWinner =
+            res.matchWinner ||
+            (res.playerNewHp <= 0 && res.opponentNewHp <= 0
+              ? "draw"
+              : res.playerNewHp <= 0
+                ? "opponent"
+                : "player");
+
+          setPhase("MATCH_FINISHED");
+          setMatchWinner(finalWinner);
+          setMatchFinishReason(res.reason || "hp_zero");
+          if (finalWinner === "player") {
+            soundManager.playHitGodlike();
+          } else if (finalWinner === "opponent") {
+            soundManager.playGameOver();
+          }
+
+          // ホストの場合、確実に相手クライアントへ試合終了を通知
+          if (stateRef.current.isHost && channelRef.current) {
+            channelRef.current.send({
+              type: "broadcast",
+              event: "match_finished",
+              payload: {
+                winner: finalWinner,
+                reason: res.reason || "hp_zero",
+                playerHp: res.playerNewHp,
+                opponentHp: res.opponentNewHp,
+              },
+            });
+          }
+
+          // 試合結果を記録 (バックグラウンドで安全に送信)
+          recordMatchResult(finalWinner, res.playerNewHp, res.opponentNewHp);
+        } else {
+          // ホストが次のラウンドを開始
+          if (stateRef.current.isHost) {
+            triggerNextRound(stateRef.current.currentRound + 1);
+          }
+        }
+      }, resolveDelay);
+    },
+    [triggerNextRound],
+  );
+
+  // 2. タップ/クリック判定
+  const handleTap = useCallback(():
+    | {
+        type: "FOUL";
+        reason: string;
+      }
+    | {
+        type: "SUCCESS";
+        reactionTime: number;
+        rank: "GODLIKE" | "EXCELLENT" | "NORMAL";
+      }
+    | null => {
+    const currentPhase = stateRef.current.phase;
+    const now = performance.now();
+
+    // 待機中（WAITING: 赤画面）のタップはフライング（即死ペナルティ）
+    if (currentPhase === "WAITING") {
+      clearAllTimers();
+      const foulReason = checkFoul(null, true);
+      soundManager.playGameOver();
+      haptics.gameOver();
+
+      stateRef.current.player = {
+        ...stateRef.current.player,
+        currentRoundFoul: foulReason,
+      };
+
+      setPlayer((prev) => {
+        const nextState = {
+          ...prev,
+          currentRoundFoul: foulReason,
+        };
+        if (stateRef.current.opponent) {
+          evaluateRoundIfReady(nextState, stateRef.current.opponent);
+        }
+        return nextState;
+      });
+
+      // 相手へフライング通知をブロードキャスト
+      if (channelRef.current) {
+        const payload: FoulPayload = {
+          round: stateRef.current.currentRound,
+          reason: "early_click",
+        };
+        channelRef.current.send({
+          type: "broadcast",
+          event: "foul",
+          payload,
+        });
+      }
+      return { type: "FOUL", reason: foulReason || "early_click" };
+    }
+
+    // 反応受付中（ACTION: 緑画面）のタップ
+    if (currentPhase === "ACTION") {
+      if (
+        stateRef.current.player.currentRoundTime !== null ||
+        stateRef.current.player.currentRoundFoul !== null
+      ) {
+        return null;
+      }
+      soundManager.stopTick();
+      if (!actionStartTimeRef.current) return null;
+      const reactionTime =
+        Math.round((now - actionStartTimeRef.current) * 10) / 10;
+      const foulReason = checkFoul(reactionTime, false);
+
+      if (foulReason) {
+        // 100ms未満の異常計測値によるペナルティ
+        clearAllTimers();
+        soundManager.playGameOver();
+        haptics.gameOver();
+
+        stateRef.current.player = {
+          ...stateRef.current.player,
+          currentRoundTime: reactionTime,
+          currentRoundFoul: foulReason,
+        };
+
+        setPlayer((prev) => {
+          const nextState = {
+            ...prev,
+            currentRoundTime: reactionTime,
+            currentRoundFoul: foulReason,
+          };
+          if (stateRef.current.opponent) {
+            evaluateRoundIfReady(nextState, stateRef.current.opponent);
+          }
+          return nextState;
+        });
+
+        if (channelRef.current) {
+          const payload: FoulPayload = {
+            round: stateRef.current.currentRound,
+            reason: foulReason,
+          };
+          channelRef.current.send({
+            type: "broadcast",
+            event: "foul",
+            payload,
+          });
+        }
+        return { type: "FOUL", reason: foulReason };
+      }
+
+      // 正常な反応速度の計測
+      const rank = getBattleReactionRank(reactionTime, player.device);
+      if (rank === "GODLIKE") {
+        soundManager.playHitGodlike();
+        haptics.hitGodlike();
+      } else if (rank === "EXCELLENT") {
+        soundManager.playHitExcellent();
+        haptics.hitExcellent();
+      } else {
+        soundManager.playHitNormal();
+        haptics.hitNormal();
+      }
+
+      stateRef.current.player = {
+        ...stateRef.current.player,
+        currentRoundTime: reactionTime,
+        currentRoundRank: rank,
+      };
+
+      setPlayer((prev) => {
+        const nextState = {
+          ...prev,
+          currentRoundTime: reactionTime,
+          currentRoundRank: rank,
+        };
+        if (stateRef.current.opponent) {
+          evaluateRoundIfReady(nextState, stateRef.current.opponent);
+        }
+        return nextState;
+      });
+
+      // 相手へ計測タイムをブロードキャスト
+      if (channelRef.current) {
+        const payload: SubmitTimePayload = {
+          round: stateRef.current.currentRound,
+          time: reactionTime,
+          rank,
+        };
+        channelRef.current.send({
+          type: "broadcast",
+          event: "submit_time",
+          payload,
+        });
+      }
+
+      return { type: "SUCCESS", reactionTime, rank };
+    }
+
+    return null;
+  }, [clearAllTimers, evaluateRoundIfReady, player.device]);
+
+  // 3. デバイス警告の承諾
+  const acceptDeviceWarning = useCallback(() => {
+    setDeviceWarningAcceptedByMe(true);
+    if (channelRef.current) {
+      const payload: DeviceWarningAcceptPayload = { userId: localUserId };
+      channelRef.current.send({
+        type: "broadcast",
+        event: "device_warning_accept",
+        payload,
+      });
+    }
+  }, [localUserId]);
+
+  // 4. マッチ開始（ホストが実行）
+  const startMatch = useCallback(() => {
+    if (!stateRef.current.isHost) return;
+    soundManager.unlock();
+    soundManager.playBgm();
+    if (
+      hasDeviceMismatch &&
+      (!deviceWarningAcceptedByMe || !deviceWarningAcceptedByOpponent)
+    ) {
+      setPhase("DEVICE_WARNING");
+      // ゲスト側にもデバイス警告モーダルを表示させる
+      channelRef.current?.send({
+        type: "broadcast",
+        event: "device_warning_open",
+        payload: {},
+      });
+      return;
+    }
+    triggerNextRound(1);
+  }, [
+    hasDeviceMismatch,
+    deviceWarningAcceptedByMe,
+    deviceWarningAcceptedByOpponent,
+    triggerNextRound,
+  ]);
+
+  // 再戦リセット
+  const resetForRematch = useCallback(() => {
+    clearAllTimers();
+    soundManager.unlock();
+    setRoundLogs([]);
+    setOpponentReturnedToLobby(false);
+    setRoundResult(null);
+    setMatchWinner(null);
+    setMatchFinishReason(null);
+    setCurrentRound(1);
+    evaluatedRoundRef.current = null;
+
+    const currentHp = stateRef.current.initialHp;
+    stateRef.current.currentRound = 1;
+    stateRef.current.player = {
+      ...stateRef.current.player,
+      hp: currentHp,
+      combo: 0,
+      godlikeCombo: 0,
+      comboRank: null,
+      currentRoundTime: null,
+      currentRoundRank: null,
+      currentRoundFoul: null,
+    };
+    if (stateRef.current.opponent) {
+      stateRef.current.opponent = {
+        ...stateRef.current.opponent,
+        hp: currentHp,
+        combo: 0,
+        godlikeCombo: 0,
+        comboRank: null,
+        currentRoundTime: null,
+        currentRoundRank: null,
+        currentRoundFoul: null,
+      };
+    }
+
+    setPlayer((prev) => ({
+      ...prev,
+      hp: currentHp,
+      combo: 0,
+      godlikeCombo: 0,
+      comboRank: null,
+      currentRoundTime: null,
+      currentRoundRank: null,
+      currentRoundFoul: null,
+    }));
+
+    setOpponent((prev) =>
+      prev
+        ? {
+            ...prev,
+            hp: currentHp,
+            combo: 0,
+            godlikeCombo: 0,
+            comboRank: null,
+            currentRoundTime: null,
+            currentRoundRank: null,
+            currentRoundFoul: null,
+          }
+        : null,
+    );
+
+    if (stateRef.current.isHost) {
+      triggerNextRound(1);
+    }
+  }, [clearAllTimers, triggerNextRound]);
+
+  // 5. 再戦要求
+  const requestRematch = useCallback(() => {
+    setRematchRequestedByMe(true);
+    rematchRequestedByMeRef.current = true;
+
+    // 相手が既にロビーへ戻っている場合は再戦要求ブロードキャストは行わない
+    if (opponentReturnedToLobby) {
+      return;
+    }
+
+    if (channelRef.current) {
+      const payload: RematchPayload = { fromUserId: localUserId };
+      channelRef.current.send({
+        type: "broadcast",
+        event: "rematch_request",
+        payload,
+      });
+    }
+
+    // 相手が既に再戦要求を出していれば即座に再戦開始
+    if (rematchRequestedByOpponent) {
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: "broadcast",
+          event: "rematch_accept",
+          payload: {},
+        });
+      }
+      resetForRematch();
+    }
+  }, [
+    localUserId,
+    rematchRequestedByOpponent,
+    opponentReturnedToLobby,
+    resetForRematch,
+  ]);
+
+  // 初期HP変更処理 (ホストのみ操作可能、リアルタイム反映)
+  const changeInitialHp = useCallback((newHp: InitialHpOption) => {
+    const now = Date.now();
+    hpTimestampRef.current = now;
+    setInitialHp(newHp);
+    stateRef.current.initialHp = newHp;
+    setPlayer((p) => ({ ...p, hp: newHp }));
+    setOpponent((o) => (o ? { ...o, hp: newHp } : null));
+
+    if (channelRef.current) {
+      // Broadcast は軽量・即時送信 (Presenceのleave/joinを発生させず安定同期)
+      channelRef.current.send({
+        type: "broadcast",
+        event: "update_hp",
+        payload: { initialHp: newHp, timestamp: now },
+      });
+    }
+  }, []);
+
+  // リアクションスタンプ (表示は REACTION_DISPLAY_MS、連打は REACTION_COOLDOWN_MS で制限)
+  const [myReaction, setMyReaction] = useState<ReactionEmoji | null>(null);
+  const [opponentReaction, setOpponentReaction] =
+    useState<ReactionEmoji | null>(null);
+  const myReactionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const opponentReactionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSentReactionRef = useRef(0);
+  const lastReceivedReactionRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      if (myReactionTimerRef.current) clearTimeout(myReactionTimerRef.current);
+      if (opponentReactionTimerRef.current)
+        clearTimeout(opponentReactionTimerRef.current);
+    },
+    [],
+  );
+
+  const sendReaction = useCallback((emoji: ReactionEmoji) => {
+    if (!isReactionEmoji(emoji)) return;
+    const now = Date.now();
+    if (now - lastSentReactionRef.current < REACTION_COOLDOWN_MS) return;
+    lastSentReactionRef.current = now;
+
+    setMyReaction(emoji);
+    if (myReactionTimerRef.current) clearTimeout(myReactionTimerRef.current);
+    myReactionTimerRef.current = setTimeout(
+      () => setMyReaction(null),
+      REACTION_DISPLAY_MS,
+    );
+
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "reaction",
+      payload: { emoji },
+    });
+  }, []);
+
+  // 6. ロビーへ戻る（自身をロビー画面へ戻す）
+  const resetToLobbyState = useCallback(() => {
+    clearAllTimers();
+    setRoundLogs([]);
+    setPhase("LOBBY");
+    setCountdown(null);
+    setRoundResult(null);
+    setMatchWinner(null);
+    setMatchFinishReason(null);
+    setRematchRequestedByMe(false);
+    rematchRequestedByMeRef.current = false;
+    setRematchRequestedByOpponent(false);
+    setOpponentReturnedToLobby(false);
+    setCurrentRound(1);
+
+    const currentHp = stateRef.current.initialHp;
+    stateRef.current.currentRound = 1;
+    stateRef.current.player = {
+      ...stateRef.current.player,
+      hp: currentHp,
+      combo: 0,
+      godlikeCombo: 0,
+      comboRank: null,
+      currentRoundTime: null,
+      currentRoundRank: null,
+      currentRoundFoul: null,
+    };
+    if (stateRef.current.opponent) {
+      stateRef.current.opponent = {
+        ...stateRef.current.opponent,
+        hp: currentHp,
+        combo: 0,
+        godlikeCombo: 0,
+        comboRank: null,
+        currentRoundTime: null,
+        currentRoundRank: null,
+        currentRoundFoul: null,
+      };
+    }
+
+    setPlayer((prev) => ({
+      ...prev,
+      hp: currentHp,
+      combo: 0,
+      godlikeCombo: 0,
+      comboRank: null,
+      currentRoundTime: null,
+      currentRoundRank: null,
+      currentRoundFoul: null,
+      isHost: stateRef.current.isHost,
+    }));
+
+    // Presenceを即時チェック：相手がすでに退室していれば即座にホストへ昇格
+    if (channelRef.current) {
+      const presenceState = channelRef.current.presenceState<PresencePayload>();
+      const allPresences: PresencePayload[] = [];
+      Object.values(presenceState).forEach((list) => {
+        list.forEach((item) => allPresences.push(item));
+      });
+      const otherPresences = allPresences.filter(
+        (p) => p.userId !== localUserId,
+      );
+      if (otherPresences.length === 0) {
+        setOpponent(null);
+        if (!stateRef.current.isHost) {
+          promoteSelfToHost();
+        }
+      } else {
+        const other = otherPresences[otherPresences.length - 1];
+        setOpponent((prev) => ({
+          userId: other.userId,
+          userName: other.userName,
+          device: other.device,
+          hp: prev ? prev.hp : currentHp,
+          combo: 0,
+          godlikeCombo: 0,
+          comboRank: null,
+          currentRoundTime: null,
+          currentRoundRank: null,
+          currentRoundFoul: null,
+          isReady: other.isReady,
+          isHost: other.isHost,
+        }));
+      }
+    }
+  }, [clearAllTimers, localUserId, promoteSelfToHost]);
+
+  const returnToLobby = useCallback(() => {
+    resetToLobbyState();
+    if (channelRef.current) {
+      channelRef.current.send({
+        type: "broadcast",
+        event: "return_to_lobby",
+        payload: {},
+      });
+    }
+  }, [resetToLobbyState]);
+
+  // 7. Supabase Realtime 接続とライフサイクル
+  useEffect(() => {
+    if (!roomId) return;
+
+    const channel = supabase.channel(`battle:${roomId}`, {
+      config: {
+        presence: { key: localUserId },
+        broadcast: { ack: false, self: false },
+      },
+    });
+
+    channelRef.current = channel;
+
+    // Presence: 同期 & 退出イベント
+    const syncPresence = () => {
+      const presenceState = channel.presenceState<PresencePayload>();
+      const allPresences: PresencePayload[] = [];
+
+      Object.values(presenceState).forEach((list) => {
+        list.forEach((item) => allPresences.push(item));
+      });
+
+      // 自身以外のプレイヤーを探す (複数ある場合は最新のものを取得)
+      const otherPresences = allPresences.filter(
+        (p) => p.userId !== localUserId,
+      );
+      const other =
+        otherPresences.length > 0
+          ? otherPresences[otherPresences.length - 1]
+          : undefined;
+
+      if (other) {
+        // 相手が確認できた場合、昇格猶予タイマーがあればキャンセル
+        if (hostPromotionTimerRef.current) {
+          clearTimeout(hostPromotionTimerRef.current);
+          hostPromotionTimerRef.current = null;
+        }
+
+        sawOpponentRef.current = true;
+
+        // ゲスト側の場合、初期接続時（hpTimestampRef.current === 0）のみ Presence から initialHp を取得
+        if (
+          !stateRef.current.isHost &&
+          other.initialHp &&
+          hpTimestampRef.current === 0
+        ) {
+          const syncedHp = other.initialHp as InitialHpOption;
+          if (syncedHp !== stateRef.current.initialHp) {
+            setInitialHp(syncedHp);
+            stateRef.current.initialHp = syncedHp;
+            setPlayer((p) => ({ ...p, hp: syncedHp }));
+          }
+        }
+
+        const effectiveHp = stateRef.current.isHost
+          ? stateRef.current.initialHp
+          : other.initialHp || stateRef.current.initialHp;
+
+        setOpponent((prev) => ({
+          userId: other.userId,
+          userName: other.userName,
+          device: other.device,
+          hp: prev ? prev.hp : effectiveHp,
+          combo: prev?.combo ?? 0,
+          godlikeCombo: prev?.godlikeCombo ?? 0,
+          comboRank: prev?.comboRank ?? null,
+          currentRoundTime: prev?.currentRoundTime ?? null,
+          currentRoundRank: prev?.currentRoundRank ?? null,
+          currentRoundFoul: prev?.currentRoundFoul ?? null,
+          isReady: other.isReady,
+          isHost: other.isHost,
+        }));
+      } else {
+        // 相手が一時的に見当たらない場合
+        setOpponent(null);
+
+        if (stateRef.current.phase === "LOBBY") {
+          // ロビーで相手が不在、かつホストでない場合
+          if (!stateRef.current.isHost) {
+            if (sawOpponentRef.current || !hostPromotionTimerRef.current) {
+              hostPromotionTimerRef.current = setTimeout(() => {
+                hostPromotionTimerRef.current = null;
+                if (
+                  !stateRef.current.isHost &&
+                  stateRef.current.phase === "LOBBY"
+                ) {
+                  sawOpponentRef.current = false;
+                  promoteSelfToHost();
+                }
+              }, 1500);
+            }
+          }
+        } else if (stateRef.current.phase === "MATCH_FINISHED") {
+          // リザルト画面で相手が抜けた場合、ホストでなければ昇格
+          if (!stateRef.current.isHost) {
+            promoteSelfToHost();
+          }
+        } else {
+          // 対戦中の切断判定
+          if (sawOpponentRef.current || stateRef.current.opponent) {
+            setPhase("MATCH_FINISHED");
+            setMatchWinner("player");
+            setMatchFinishReason("opponent_left");
+          }
+        }
+      }
+    };
+
+    channel.on("presence", { event: "sync" }, syncPresence);
+    channel.on("presence", { event: "leave" }, syncPresence);
+
+    // Broadcast: player_left (相手が能動的に退出した通知)
+    channel.on("broadcast", { event: "player_left" }, ({ payload }) => {
+      const data = payload as { userId: string; isHost: boolean };
+      if (data.userId !== localUserId) {
+        if (hostPromotionTimerRef.current) {
+          clearTimeout(hostPromotionTimerRef.current);
+          hostPromotionTimerRef.current = null;
+        }
+        setOpponent(null);
+        sawOpponentRef.current = false;
+
+        // 相手ホストが退出した場合、現在のフェーズに関わらず新ホストに昇格
+        if (data.isHost) {
+          promoteSelfToHost();
+        }
+
+        if (
+          stateRef.current.phase !== "LOBBY" &&
+          stateRef.current.phase !== "MATCH_FINISHED"
+        ) {
+          setPhase("MATCH_FINISHED");
+          setMatchWinner("player");
+          setMatchFinishReason("opponent_left");
+        }
+      }
+    });
+
+    // Broadcast: match_finished (ホストからの決着・終了通知)
+    channel.on("broadcast", { event: "match_finished" }, ({ payload }) => {
+      const data = payload as {
+        winner: "player" | "opponent" | "draw" | null;
+        reason: "hp_zero" | "foul" | "opponent_left" | "both_hp_zero";
+        playerHp: number;
+        opponentHp: number;
+      };
+      clearAllTimers();
+
+      // ホスト視点の勝者をゲスト視点に反転
+      const guestWinner =
+        data.winner === "player"
+          ? "opponent"
+          : data.winner === "opponent"
+            ? "player"
+            : data.winner;
+
+      // ゲスト視点でのHP同期: playerHpはホスト、opponentHpはゲスト
+      setPlayer((prev) => ({ ...prev, hp: data.opponentHp }));
+      setOpponent((prev) => (prev ? { ...prev, hp: data.playerHp } : null));
+      stateRef.current.player.hp = data.opponentHp;
+      if (stateRef.current.opponent) {
+        stateRef.current.opponent.hp = data.playerHp;
+      }
+
+      setPhase("MATCH_FINISHED");
+      setMatchWinner(guestWinner);
+      setMatchFinishReason(data.reason || "hp_zero");
+      recordMatchResult(guestWinner, data.opponentHp, data.playerHp);
+      if (guestWinner === "player") {
+        soundManager.playHitGodlike();
+      } else if (guestWinner === "opponent") {
+        soundManager.playGameOver();
+      }
+    });
+
+    // Broadcast: round_start
+    channel.on("broadcast", { event: "round_start" }, ({ payload }) => {
+      const data = payload as RoundStartPayload;
+      if (data.initialHp) {
+        setInitialHp(data.initialHp as InitialHpOption);
+        stateRef.current.initialHp = data.initialHp as InitialHpOption;
+      }
+
+      if (data.round === 1) {
+        setRoundLogs([]);
+        const hpToSet = data.initialHp || stateRef.current.initialHp;
+        setPlayer((p) => ({
+          ...p,
+          hp: hpToSet,
+          combo: 0,
+          godlikeCombo: 0,
+          comboRank: null,
+          currentRoundTime: null,
+          currentRoundRank: null,
+          currentRoundFoul: null,
+        }));
+        setOpponent((o) =>
+          o
+            ? {
+                ...o,
+                hp: hpToSet,
+                combo: 0,
+                godlikeCombo: 0,
+                comboRank: null,
+                currentRoundTime: null,
+                currentRoundRank: null,
+                currentRoundFoul: null,
+              }
+            : null,
+        );
+        stateRef.current.player.hp = hpToSet;
+        stateRef.current.player.combo = 0;
+        stateRef.current.player.godlikeCombo = 0;
+        stateRef.current.player.comboRank = null;
+        stateRef.current.player.currentRoundTime = null;
+        stateRef.current.player.currentRoundRank = null;
+        stateRef.current.player.currentRoundFoul = null;
+        if (stateRef.current.opponent) {
+          stateRef.current.opponent.hp = hpToSet;
+          stateRef.current.opponent.combo = 0;
+          stateRef.current.opponent.godlikeCombo = 0;
+          stateRef.current.opponent.comboRank = null;
+          stateRef.current.opponent.currentRoundTime = null;
+          stateRef.current.opponent.currentRoundRank = null;
+          stateRef.current.opponent.currentRoundFoul = null;
+        }
+        setRematchRequestedByMe(false);
+        rematchRequestedByMeRef.current = false;
+        setRematchRequestedByOpponent(false);
+        setMatchWinner(null);
+        setMatchFinishReason(null);
+        setRoundResult(null);
+      }
+
+      // Resolve timers may be throttled while a mobile browser is backgrounded.
+      // The host's next-round snapshot is authoritative for HP and combo state.
+      if (data.hostState && data.guestState) {
+        const localState = stateRef.current.isHost
+          ? data.hostState
+          : data.guestState;
+        const remoteState = stateRef.current.isHost
+          ? data.guestState
+          : data.hostState;
+
+        setPlayer((prev) => ({ ...prev, ...localState }));
+        setOpponent((prev) => (prev ? { ...prev, ...remoteState } : null));
+        stateRef.current.player = {
+          ...stateRef.current.player,
+          ...localState,
+        };
+        if (stateRef.current.opponent) {
+          stateRef.current.opponent = {
+            ...stateRef.current.opponent,
+            ...remoteState,
+          };
+        }
+      }
+
+      // round > 1 でどちらかのHPがすでに0なら次ラウンドへ進まず決着状態を維持
+      if (
+        data.round > 1 &&
+        (stateRef.current.player.hp <= 0 ||
+          (stateRef.current.opponent?.hp ?? 1000) <= 0)
+      ) {
+        clearAllTimers();
+        const winner =
+          stateRef.current.player.hp <= 0 &&
+          (stateRef.current.opponent?.hp ?? 0) <= 0
+            ? "draw"
+            : stateRef.current.player.hp <= 0
+              ? "opponent"
+              : "player";
+        setPhase("MATCH_FINISHED");
+        setMatchWinner(winner);
+        setMatchFinishReason("hp_zero");
+        return;
+      }
+
+      startRoundWithDelay(data.round, data.delay);
+    });
+
+    // Broadcast: update_hp (ホストがロビーで初期HPを変更)
+    channel.on("broadcast", { event: "update_hp" }, ({ payload }) => {
+      const data = payload as {
+        initialHp: InitialHpOption;
+        timestamp?: number;
+      };
+      const timestamp = data.timestamp || Date.now();
+      if (timestamp >= hpTimestampRef.current && data.initialHp) {
+        hpTimestampRef.current = timestamp;
+        setInitialHp(data.initialHp);
+        stateRef.current.initialHp = data.initialHp;
+        setPlayer((p) => ({ ...p, hp: data.initialHp }));
+        setOpponent((o) => (o ? { ...o, hp: data.initialHp } : null));
+        stateRef.current.player.hp = data.initialHp;
+        if (stateRef.current.opponent) {
+          stateRef.current.opponent.hp = data.initialHp;
+        }
+      }
+    });
+
+    // Broadcast: reaction (相手のリアクションスタンプ)
+    channel.on("broadcast", { event: "reaction" }, ({ payload }) => {
+      const emoji = (payload as { emoji?: unknown } | null)?.emoji;
+      if (!isReactionEmoji(emoji)) return;
+      // 受信側でも連打を制限 (改変クライアント対策)
+      const now = Date.now();
+      if (now - lastReceivedReactionRef.current < REACTION_COOLDOWN_MS) return;
+      lastReceivedReactionRef.current = now;
+
+      setOpponentReaction(emoji);
+      if (opponentReactionTimerRef.current)
+        clearTimeout(opponentReactionTimerRef.current);
+      opponentReactionTimerRef.current = setTimeout(
+        () => setOpponentReaction(null),
+        REACTION_DISPLAY_MS,
+      );
+    });
+
+    // Broadcast: submit_time
+    channel.on("broadcast", { event: "submit_time" }, ({ payload }) => {
+      const data = payload as SubmitTimePayload;
+      if (data.round !== stateRef.current.currentRound) {
+        return;
+      }
+      setOpponent((prev) => {
+        if (!prev) return null;
+        const nextState = {
+          ...prev,
+          currentRoundTime: data.time,
+          currentRoundRank: data.rank,
+        };
+        if (stateRef.current.opponent) {
+          stateRef.current.opponent.currentRoundTime = data.time;
+          stateRef.current.opponent.currentRoundRank = data.rank;
+        }
+        evaluateRoundIfReady(stateRef.current.player, nextState);
+        return nextState;
+      });
+    });
+
+    // Broadcast: foul
+    channel.on("broadcast", { event: "foul" }, ({ payload }) => {
+      const data = payload as FoulPayload;
+      if (data.round !== stateRef.current.currentRound) {
+        return;
+      }
+      setOpponent((prev) => {
+        if (!prev) return null;
+        const nextState = {
+          ...prev,
+          currentRoundFoul: data.reason,
+        };
+        if (stateRef.current.opponent) {
+          stateRef.current.opponent.currentRoundFoul = data.reason;
+        }
+        evaluateRoundIfReady(stateRef.current.player, nextState);
+        return nextState;
+      });
+    });
+
+    // Broadcast: device_warning_open (ホスト→ゲスト)
+    channel.on("broadcast", { event: "device_warning_open" }, () => {
+      if (stateRef.current.isHost) return;
+      setPhase("DEVICE_WARNING");
+    });
+
+    // Broadcast: device_warning_accept
+    channel.on("broadcast", { event: "device_warning_accept" }, () => {
+      setDeviceWarningAcceptedByOpponent(true);
+    });
+
+    // Broadcast: rematch_request
+    channel.on("broadcast", { event: "rematch_request" }, () => {
+      setRematchRequestedByOpponent(true);
+      if (rematchRequestedByMeRef.current) {
+        if (stateRef.current.isHost) {
+          resetForRematch();
+        } else {
+          if (channelRef.current) {
+            channelRef.current.send({
+              type: "broadcast",
+              event: "rematch_accept",
+              payload: {},
+            });
+          }
+          resetForRematch();
+        }
+      }
+    });
+
+    // Broadcast: rematch_accept
+    channel.on("broadcast", { event: "rematch_accept" }, () => {
+      if (stateRef.current.phase === "MATCH_FINISHED") {
+        resetForRematch();
+      }
+    });
+
+    // Broadcast: return_to_lobby (相手がロビーに戻った通知)
+    channel.on("broadcast", { event: "return_to_lobby" }, () => {
+      setOpponentReturnedToLobby(true);
+      setRematchRequestedByOpponent(false);
+    });
+
+    // Broadcast: request_lobby_state (ゲスト入室時にホストへ設定を要求)
+    channel.on("broadcast", { event: "request_lobby_state" }, () => {
+      if (stateRef.current.isHost && channelRef.current) {
+        channelRef.current.send({
+          type: "broadcast",
+          event: "update_hp",
+          payload: {
+            initialHp: stateRef.current.initialHp,
+            timestamp: hpTimestampRef.current || Date.now(),
+          },
+        });
+      }
+    });
+
+    // チャンネル購読
+    channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        const payload: PresencePayload = {
+          userId: localUserId,
+          userName: localUserName,
+          device: detectedDevice,
+          isReady: true,
+          initialHp: stateRef.current.initialHp,
+          isHost: stateRef.current.isHost,
+          hpTimestamp: hpTimestampRef.current || Date.now(),
+        };
+        channel.track(payload);
+
+        // ゲスト入室時はホストへ現在の最新ロビー設定を問い合わせる
+        if (!stateRef.current.isHost) {
+          channel.send({
+            type: "broadcast",
+            event: "request_lobby_state",
+            payload: {},
+          });
+        }
+      }
+    });
+
+    return () => {
+      clearAllTimers();
+      if (hostPromotionTimerRef.current) {
+        clearTimeout(hostPromotionTimerRef.current);
+        hostPromotionTimerRef.current = null;
+      }
+      channel.unsubscribe();
+      channelRef.current = null;
+    };
+  }, [
+    roomId,
+    localUserId,
+    localUserName,
+    detectedDevice,
+    initialIsHost,
+    clearAllTimers,
+    startRoundWithDelay,
+    evaluateRoundIfReady,
+    resetForRematch,
+    resetToLobbyState,
+    promoteSelfToHost,
+    supabase,
+  ]);
+
+  // 両者がデバイス警告を承諾したときの自動遷移
+  useEffect(() => {
+    if (
+      phase === "DEVICE_WARNING" &&
+      deviceWarningAcceptedByMe &&
+      deviceWarningAcceptedByOpponent
+    ) {
+      if (isHost) {
+        triggerNextRound(1);
+      }
+    }
+  }, [
+    phase,
+    deviceWarningAcceptedByMe,
+    deviceWarningAcceptedByOpponent,
+    isHost,
+    triggerNextRound,
+  ]);
+
+  return {
+    roomId,
+    isHost,
+    promotedToHost,
+    phase,
+    setPhase,
+    initialHp,
+    changeInitialHp,
+    myReaction,
+    opponentReaction,
+    sendReaction,
+    currentRound,
+    countdown,
+    player,
+    opponent,
+    hasDeviceMismatch,
+    deviceWarningAcceptedByMe,
+    deviceWarningAcceptedByOpponent,
+    roundResult,
+    matchWinner,
+    matchFinishReason,
+    rematchRequestedByMe,
+    rematchRequestedByOpponent,
+    opponentReturnedToLobby,
+    handleTap,
+    startMatch,
+    acceptDeviceWarning,
+    requestRematch,
+    returnToLobby,
+    leaveRoom,
+    roundLogs,
+  };
+};

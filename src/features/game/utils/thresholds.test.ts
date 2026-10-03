@@ -9,8 +9,8 @@ describe("thresholds", () => {
   it("has correct threshold definitions", () => {
     expect(REACTION_THRESHOLDS.PC.GODLIKE).toBe(180);
     expect(REACTION_THRESHOLDS.PC.EXCELLENT).toBe(200);
-    expect(REACTION_THRESHOLDS.MOBILE.GODLIKE).toBe(250);
-    expect(REACTION_THRESHOLDS.MOBILE.EXCELLENT).toBe(270);
+    expect(REACTION_THRESHOLDS.MOBILE.GODLIKE).toBe(180);
+    expect(REACTION_THRESHOLDS.MOBILE.EXCELLENT).toBe(200);
   });
 
   describe("getReactionRank for PC", () => {
@@ -31,20 +31,20 @@ describe("thresholds", () => {
   });
 
   describe("getReactionRank for MOBILE", () => {
-    it("returns GODLIKE for < 250ms", () => {
-      expect(getReactionRank(249.9, "MOBILE")).toBe("GODLIKE");
-      expect(getReactionRank(240.4, "MOBILE")).toBe("GODLIKE");
+    it("returns GODLIKE for < 180ms", () => {
+      expect(getReactionRank(179.9, "MOBILE")).toBe("GODLIKE");
+      expect(getReactionRank(170, "MOBILE")).toBe("GODLIKE");
     });
 
-    it("returns EXCELLENT for 250ms - 269.9ms", () => {
-      expect(getReactionRank(250, "MOBILE")).toBe("EXCELLENT");
-      expect(getReactionRank(260.5, "MOBILE")).toBe("EXCELLENT");
-      expect(getReactionRank(269.9, "MOBILE")).toBe("EXCELLENT");
+    it("returns EXCELLENT for 180ms - 199.9ms", () => {
+      expect(getReactionRank(180, "MOBILE")).toBe("EXCELLENT");
+      expect(getReactionRank(190.5, "MOBILE")).toBe("EXCELLENT");
+      expect(getReactionRank(199.9, "MOBILE")).toBe("EXCELLENT");
     });
 
-    it("returns NORMAL for >= 270ms", () => {
-      expect(getReactionRank(270, "MOBILE")).toBe("NORMAL");
-      expect(getReactionRank(303.1, "MOBILE")).toBe("NORMAL");
+    it("returns NORMAL for >= 200ms", () => {
+      expect(getReactionRank(200, "MOBILE")).toBe("NORMAL");
+      expect(getReactionRank(230.1, "MOBILE")).toBe("NORMAL");
     });
   });
 

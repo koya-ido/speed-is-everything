@@ -1,6 +1,6 @@
 "use client";
 
-import { clearPendingScore } from "@/features/game";
+import { clearPendingScore } from "@/features/game/utils/pendingScore";
 import { Link } from "@/i18n/routing";
 import { ReactNode } from "react";
 

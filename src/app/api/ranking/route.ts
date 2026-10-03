@@ -27,7 +27,7 @@ export const GET = async (request: Request) => {
       );
     }
     const rankings = await prisma.ranking.findMany({
-      where: { deviceType },
+      where: { deviceType, isVerified: true },
       include: {
         user: {
           select: {
@@ -35,6 +35,7 @@ export const GET = async (request: Request) => {
             name: true,
             country: true,
             image: true,
+            selectedTitle: true,
           },
         },
       },

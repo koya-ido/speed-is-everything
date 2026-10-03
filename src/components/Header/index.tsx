@@ -2,39 +2,61 @@
 
 import { Button } from "@/components/Button";
 import { Dropdown, DropdownItem } from "@/components/Dropdown";
+import { useInitialHeaderUser } from "@/components/Header/AuthContext";
 import { Avatar } from "@/features/user";
 import { Link, usePathname, useRouter } from "@/i18n/routing";
 import { createClient } from "@/lib/supabase/client";
 import { useLocale } from "next-intl";
-import { useEffect, useState } from "react";
-
-import type { User } from "@supabase/supabase-js";
+import { useEffect, useMemo, useState } from "react";
 
 export const Header = () => {
-  const [user, setUser] = useState<User | null>(null);
-  const supabase = createClient();
+  const initialUser = useInitialHeaderUser();
+  const [user, setUser] = useState(initialUser);
+  const supabase = useMemo(() => createClient(), []);
   const pathname = usePathname();
   const router = useRouter();
   const locale = useLocale();
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
-      setUser(user);
+      setUser(
+        user
+          ? {
+              id: user.id,
+              avatarUrl:
+                typeof user.user_metadata?.avatar_url === "string"
+                  ? user.user_metadata.avatar_url
+                  : null,
+            }
+          : null,
+      );
     });
     const { data: authListener } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setUser(session?.user ?? null);
+      (_event, session) => {
+        const authUser = session?.user;
+        setUser(
+          authUser
+            ? {
+                id: authUser.id,
+                avatarUrl:
+                  typeof authUser.user_metadata?.avatar_url === "string"
+                    ? authUser.user_metadata.avatar_url
+                    : null,
+              }
+            : null,
+        );
       },
     );
     return () => {
       authListener.subscription.unsubscribe();
     };
-  }, []);
+  }, [supabase]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-    window.location.href = "/";
+    setUser(null);
+    router.push("/");
+    router.refresh();
   };
 
   const toggleLanguage = () => {
@@ -46,7 +68,7 @@ export const Header = () => {
     <header className="absolute top-0 left-0 w-full p-2 md:p-4 flex justify-between items-center z-50 pointer-events-auto border-b border-[#00f3ff]/20 bg-black/40 backdrop-blur-md">
       <Link
         href="/"
-        className="font-cyber flex flex-col items-center justify-center group flex-shrink-0"
+        className="font-cyber flex flex-col items-center justify-center group shrink-0"
       >
         <span className="font-bold text-lg md:text-xl text-white tracking-widest group-hover:text-[#00f3ff] transition-colors leading-tight">
           S.I.E
@@ -71,21 +93,25 @@ export const Header = () => {
           <Dropdown
             align="right"
             trigger={
-              user.user_metadata?.avatar_url && (
-                <Button
-                  variant="icon"
-                  size="none"
-                  aria-label="User Menu"
-                  className="block"
-                >
-                  <Avatar
-                    src={user.user_metadata.avatar_url}
-                    className="w-6 h-6 md:w-8 md:h-8 rounded-full border border-[#bc13fe] hover:shadow-[0_0_10px_rgba(188,19,254,0.6)] cursor-pointer object-cover"
-                  />
-                </Button>
-              )
+              <Button
+                variant="icon"
+                size="none"
+                aria-label="User Menu"
+                className="block"
+              >
+                <Avatar
+                  src={user.avatarUrl}
+                  className="w-6 h-6 md:w-8 md:h-8 rounded-full border border-[#bc13fe] hover:shadow-[0_0_10px_rgba(188,19,254,0.6)] cursor-pointer object-cover"
+                />
+              </Button>
             }
           >
+            <Link
+              href="/player-data"
+              className="px-4 py-3.5 hover:bg-white/10 text-[#00f3ff] hover:text-white font-cyber text-sm md:text-base font-bold tracking-widest transition-colors text-left flex items-center gap-3 w-full border-b border-white/5"
+            >
+              PLAYER DATA
+            </Link>
             <Link
               href="/profile"
               className="px-4 py-3.5 hover:bg-white/10 text-white font-cyber text-sm md:text-base font-bold tracking-widest transition-colors text-left flex items-center gap-3 w-full border-b border-white/5"

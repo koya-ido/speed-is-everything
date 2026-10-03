@@ -11,5 +11,6 @@ export type RankingEntry = {
     name: string;
     country: string | null;
     image: string | null;
+    selectedTitle?: string | null;
   };
 };

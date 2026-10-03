@@ -5,12 +5,12 @@ import { CountryFlag } from "@/features/user/components/CountryFlag";
 import { STANDARD_COUNTRIES } from "@/features/user/constants/countries";
 import { useTranslations } from "next-intl";
 
-export interface CountrySelectProps {
+export type CountrySelectProps = {
   country: string;
   onCountryChange: (country: string) => void;
   customCountry: string;
   onCustomCountryChange: (customCountry: string) => void;
-}
+};
 
 export const CountrySelect = ({
   country,

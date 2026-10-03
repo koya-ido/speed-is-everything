@@ -2,27 +2,35 @@
 
 import { Button } from "@/components/Button";
 import { Heading } from "@/components/Heading";
+import { HistoryModal } from "@/features/game/components/ResultSection/HistoryModal";
+import { LoginMenu } from "@/features/game/components/ResultSection/LoginMenu";
+import { ScoreStats } from "@/features/game/components/ResultSection/ScoreStats";
+import { getShareUrl } from "@/features/game/utils/gameLogic";
+import {
+  clearPendingScore,
+  setPendingScore,
+} from "@/features/game/utils/pendingScore";
 import {
   calculateAverage,
   calculateFastest,
   calculateMedian,
   calculateRemainingTime,
   calculateSlowest,
-  clearPendingScore,
-  getShareUrl,
-  setPendingScore,
-} from "@/features/game";
-import { HistoryModal } from "@/features/game/components/ResultSection/HistoryModal";
-import { LoginMenu } from "@/features/game/components/ResultSection/LoginMenu";
-import { ScoreStats } from "@/features/game/components/ResultSection/ScoreStats";
+} from "@/features/game/utils/stats";
 import { Link } from "@/i18n/routing";
 import { createClient } from "@/lib/supabase/client";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
-import { DeviceType, getDeviceType } from "@/features/game/utils/thresholds";
+import {
+  DeviceType,
+  getDeviceType,
+  getReactionRank,
+} from "@/features/game/utils/thresholds";
 
-interface ResultSectionProps {
+import type { User } from "@supabase/supabase-js";
+
+type ResultSectionProps = {
   clearCount: number;
   remainingTime: number;
   rawReactions: number[];
@@ -31,9 +39,7 @@ interface ResultSectionProps {
   sessionToken: string | null;
   deviceType?: DeviceType;
   onRetry: () => void;
-}
-
-import type { User } from "@supabase/supabase-js";
+};
 
 export const ResultSection = ({
   clearCount,
@@ -45,7 +51,7 @@ export const ResultSection = ({
   deviceType,
   onRetry,
 }: ResultSectionProps) => {
-  const [_isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [resultMsg, setResultMsg] = useState("");
   const [user, setUser] = useState<User | null>(null);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
@@ -134,12 +140,18 @@ export const ResultSection = ({
     });
   };
 
+  const locale = useLocale();
+  const overallRank =
+    clearCount > 0 ? getReactionRank(average, activeDeviceType) : "NORMAL";
+
   const shareUrl = getShareUrl({
     clearCount,
     remainingTime: finalRemainingTime,
     average,
     median,
     deviceType: activeDeviceType,
+    rank: overallRank,
+    locale,
   });
 
   return (
@@ -180,6 +192,7 @@ export const ResultSection = ({
               variant="success-solid"
               size="lg"
               className="relative z-10 w-full whitespace-nowrap"
+              disabled={isSubmitting}
               onClick={() => {
                 clearPendingScore();
                 onRetry();

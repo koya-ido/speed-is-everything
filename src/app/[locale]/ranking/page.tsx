@@ -6,9 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { headers } from "next/headers";
 import { userAgent } from "next/server";
 
-const RankingPage = async (_props?: {
-  params?: Promise<{ locale?: string }>;
-}) => {
+const RankingPage = async () => {
   const supabase = await createClient();
   const {
     data: { user },

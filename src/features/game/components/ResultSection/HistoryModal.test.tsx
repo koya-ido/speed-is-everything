@@ -1,17 +1,21 @@
 import { HistoryModal } from "@/features/game/components/ResultSection/HistoryModal";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }));
 
 describe("HistoryModal", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   it("applies PC threshold classes", () => {
     render(
       <HistoryModal
         isOpen={true}
-        onClose={() => { }}
+        onClose={() => {}}
         rawReactions={[170, 190, 210]}
         fastest={170}
         failureType={null}
@@ -34,22 +38,22 @@ describe("HistoryModal", () => {
     render(
       <HistoryModal
         isOpen={true}
-        onClose={() => { }}
-        rawReactions={[240.4, 260.0, 300.0]}
-        fastest={240.4}
+        onClose={() => {}}
+        rawReactions={[170, 190, 210]}
+        fastest={170}
         failureType={null}
         failedReaction={null}
         deviceType="MOBILE"
       />,
     );
 
-    const godlikeEl = screen.getByText("240.4 unit_ms");
+    const godlikeEl = screen.getByText("170.0 unit_ms");
     expect(godlikeEl.className).toContain("text-[#ffd700]");
 
-    const excellentEl = screen.getByText("260.0 unit_ms");
+    const excellentEl = screen.getByText("190.0 unit_ms");
     expect(excellentEl.className).toContain("text-[#ff64ff]");
 
-    const normalEl = screen.getByText("300.0 unit_ms");
+    const normalEl = screen.getByText("210.0 unit_ms");
     expect(normalEl.className).toContain("text-white");
   });
 });

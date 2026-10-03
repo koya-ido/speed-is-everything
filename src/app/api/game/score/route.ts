@@ -186,13 +186,14 @@ export const POST = async (request: Request) => {
       });
     }
 
+    let updatedUser;
     try {
-      await prisma.user.update({
+      updatedUser = await prisma.user.update({
         where: { id: user.id },
         data: { playCount: { increment: 1 } },
       });
     } catch {
-      await prisma.user.upsert({
+      updatedUser = await prisma.user.upsert({
         where: { id: user.id },
         update: { playCount: { increment: 1 } },
         create: {
@@ -204,7 +205,75 @@ export const POST = async (request: Request) => {
       });
     }
 
-    return NextResponse.json({ success: true, is_new_record: isNewRecord });
+    // 順位算出 & 最高順位更新 & 1位判定
+    let isFirstPlace = false;
+    if (isNewRecord) {
+      const betterCount = await prisma.ranking.count({
+        where: {
+          deviceType: device_type,
+          isVerified: true,
+          userId: { not: user.id },
+          OR: [
+            { clearCount: { gt: clear_count } },
+            {
+              clearCount: clear_count,
+              remainingTime: { gt: calculatedRemainingTime },
+            },
+          ],
+        },
+      });
+      const currentRank = betterCount + 1;
+      if (currentRank === 1) {
+        isFirstPlace = true;
+      }
+
+      if (device_type === "PC") {
+        if (
+          !updatedUser.highestPcRank ||
+          currentRank < updatedUser.highestPcRank
+        ) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { highestPcRank: currentRank },
+          });
+        }
+      } else {
+        if (
+          !updatedUser.highestMobileRank ||
+          currentRank < updatedUser.highestMobileRank
+        ) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { highestMobileRank: currentRank },
+          });
+        }
+      }
+    }
+
+    // 称号判定 & 付与
+    const { checkGameModeTitles, grantTitles } =
+      await import("@/features/title/server");
+    const candidateTitles = checkGameModeTitles(
+      {
+        userId: user.id,
+        clearCount: clear_count,
+        rawReactions: raw_reactions,
+        deviceType: device_type,
+        isFirstPlace,
+      },
+      {
+        playCount: updatedUser.playCount,
+        foulCount: updatedUser.foulCount ?? 0,
+      },
+    );
+
+    const newlyUnlockedTitles = await grantTitles(user.id, candidateTitles);
+
+    return NextResponse.json({
+      success: true,
+      is_new_record: isNewRecord,
+      unlocked_titles: newlyUnlockedTitles,
+    });
   } catch (error: unknown) {
     console.error("Score submission error:", error);
     return NextResponse.json(
