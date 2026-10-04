@@ -1,10 +1,13 @@
 "use client";
 
 import { INITIAL_HP_DEFAULT, InitialHpOption } from "@/features/battle/types";
+import { formatRoomId } from "@/features/battle/utils/battleLogic";
 import {
-  formatRoomId,
-  generateRoomId,
-} from "@/features/battle/utils/battleLogic";
+  BattleRoomRequestError,
+  createBattleRoom,
+  joinBattleRoom,
+  renameBattleParticipantRequest,
+} from "@/features/battle/utils/roomApi";
 import { ArrowLeft, LogIn, PlusCircle, X, Zap } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useState } from "react";
@@ -18,10 +21,27 @@ type BattleLobbyModalProps = {
     isHost: boolean;
     initialHp: InitialHpOption;
     userName: string;
+    sessionId: string;
+    sessionToken: string;
+    role: "PLAYER_1" | "PLAYER_2" | "SPECTATOR";
+    isOwner: boolean;
   }) => void;
   mode: "create" | "join";
   initialRoomId?: string;
   defaultUserName?: string;
+  inviteMode?: boolean;
+  showNameInput?: boolean;
+  existingAdmission?: {
+    roomId: string;
+    isHost: boolean;
+    initialHp: InitialHpOption;
+    userName: string;
+    sessionId: string;
+    sessionToken: string;
+    role: "PLAYER_1" | "PLAYER_2" | "SPECTATOR";
+    isOwner: boolean;
+  };
+  onRoomCodeSubmit?: (roomCode: string) => void | Promise<void>;
 };
 
 export const BattleLobbyModal = ({
@@ -32,12 +52,17 @@ export const BattleLobbyModal = ({
   mode,
   initialRoomId = "",
   defaultUserName = "",
+  inviteMode = false,
+  showNameInput = true,
+  existingAdmission,
+  onRoomCodeSubmit,
 }: BattleLobbyModalProps) => {
   const [inputRoomId, setInputRoomId] = useState(
     initialRoomId ? formatRoomId(initialRoomId) : "",
   );
   const [userName, setUserName] = useState(defaultUserName);
   const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const t = useTranslations("Battle");
 
   if (!isOpen) return null;
@@ -47,37 +72,114 @@ export const BattleLobbyModal = ({
     setInputRoomId(formatRoomId(val));
   };
 
-  const handleCreateRoom = (e: React.FormEvent) => {
+  const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    const finalRoomId = generateRoomId();
-    const finalUserName =
-      userName.trim() || `Host_${Math.floor(1000 + Math.random() * 9000)}`;
-
-    onStartBattle({
-      roomId: finalRoomId,
-      isHost: true,
-      initialHp: INITIAL_HP_DEFAULT, // ロビー画面で設定される
-      userName: finalUserName,
-    });
+    if (isSubmitting) return;
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      const admission = await createBattleRoom(userName.trim());
+      onStartBattle({
+        roomId: admission.room.code,
+        isHost: admission.participant.isGameHost,
+        initialHp: INITIAL_HP_DEFAULT,
+        userName: admission.participant.userName,
+        sessionId: admission.credentials.sessionId,
+        sessionToken: admission.credentials.token,
+        role: admission.participant.role,
+        isOwner: admission.participant.isOwner,
+      });
+    } catch (reason) {
+      setError(
+        reason instanceof BattleRoomRequestError &&
+          reason.code === "INVALID_PLAYER_NAME"
+          ? t("invalid_player_name")
+          : t("room_request_failed"),
+      );
+      console.error("Unable to create a battle room:", reason);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleJoinRoom = (e: React.FormEvent) => {
+  const handleJoinRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleaned = inputRoomId.replace(/[^0-9A-Za-z]/g, "");
-    if (cleaned.length < 6) {
-      setError(t("lobby_error_room_code"));
-      return;
+    if (isSubmitting) return;
+    const finalRoomId = formatRoomId(inputRoomId);
+    if (!existingAdmission) {
+      const cleaned = finalRoomId.replace(/[^0-9A-Za-z]/g, "");
+      if (cleaned.length !== 6) {
+        setError(t("lobby_error_room_code"));
+        return;
+      }
     }
 
-    const finalUserName =
-      userName.trim() || `Guest_${Math.floor(1000 + Math.random() * 9000)}`;
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      if (existingAdmission) {
+        const roomView = await renameBattleParticipantRequest(
+          existingAdmission.roomId,
+          {
+            sessionId: existingAdmission.sessionId,
+            token: existingAdmission.sessionToken,
+          },
+          userName.trim(),
+        );
+        const renamedParticipant = roomView.participants.find(
+          (participant) =>
+            participant.sessionId === existingAdmission.sessionId,
+        );
+        if (!renamedParticipant) {
+          throw new Error(
+            "Renamed battle participant was missing from the room response.",
+          );
+        }
+        onStartBattle({
+          ...existingAdmission,
+          userName: renamedParticipant.userName,
+        });
+      } else if (onRoomCodeSubmit) {
+        await onRoomCodeSubmit(finalRoomId);
+      } else {
+        const admission = await joinBattleRoom(finalRoomId, userName.trim());
+        onStartBattle({
+          roomId: admission.room.code,
+          isHost: admission.participant.isGameHost,
+          initialHp: INITIAL_HP_DEFAULT,
+          userName: admission.participant.userName,
+          sessionId: admission.credentials.sessionId,
+          sessionToken: admission.credentials.token,
+          role: admission.participant.role,
+          isOwner: admission.participant.isOwner,
+        });
+      }
+    } catch (reason) {
+      const errorCode =
+        reason &&
+        typeof reason === "object" &&
+        "code" in reason &&
+        typeof reason.code === "string"
+          ? reason.code
+          : undefined;
+      const isInvalidRoom = ["ROOM_NOT_FOUND", "ROOM_ENDED"].includes(
+        errorCode || "",
+      );
+      const isInvalidPlayerName = errorCode === "INVALID_PLAYER_NAME";
 
-    onStartBattle({
-      roomId: inputRoomId,
-      isHost: false,
-      initialHp: INITIAL_HP_DEFAULT, // 接続後にホストのPresenceから同期される
-      userName: finalUserName,
-    });
+      setError(
+        isInvalidRoom
+          ? t("room_invalid")
+          : isInvalidPlayerName
+            ? t("invalid_player_name")
+            : t("room_request_failed"),
+      );
+      if (!isInvalidRoom && !isInvalidPlayerName) {
+        console.error("Unable to join a battle room:", reason);
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -130,24 +232,32 @@ export const BattleLobbyModal = ({
           </p>
         </div>
 
-        {/* ユーザー名入力 */}
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs uppercase font-mono text-gray-400 tracking-wider">
-            {t("lobby_player_name")}
-          </label>
-          <input
-            type="text"
-            value={userName}
-            onChange={(e) => setUserName(e.target.value)}
-            placeholder={t("lobby_player_name_placeholder")}
-            maxLength={15}
-            className={`w-full px-4 py-3 rounded-xl bg-black/60 border border-gray-800 outline-none text-white text-sm font-medium transition-colors ${
-              mode === "create"
-                ? "focus:border-[#00f3ff]"
-                : "focus:border-[#00ff66]"
-            }`}
-          />
-        </div>
+        {showNameInput && (
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="battle-player-name"
+              className="text-xs uppercase font-mono text-gray-400 tracking-wider"
+            >
+              {t("lobby_player_name")}
+            </label>
+            <input
+              id="battle-player-name"
+              type="text"
+              value={userName}
+              onChange={(e) => setUserName(e.target.value)}
+              placeholder={t("lobby_player_name_placeholder")}
+              maxLength={15}
+              autoFocus={inviteMode}
+              autoComplete="nickname"
+              className={`w-full px-4 py-3 rounded-xl bg-black/60 border border-gray-800 outline-none text-white text-sm font-medium transition-colors ${
+                mode === "create"
+                  ? "focus:border-[#00f3ff]"
+                  : "focus:border-[#00ff66]"
+              }`}
+            />
+          </div>
+        )}
+
 
         {/* 部屋作成フォーム */}
         {mode === "create" && (
@@ -164,9 +274,10 @@ export const BattleLobbyModal = ({
 
             <button
               type="submit"
-              className="w-full py-4 rounded-xl font-cyber font-bold text-lg uppercase tracking-widest bg-[#00f3ff] hover:bg-[#33f6ff] text-black shadow-[0_0_25px_rgba(0,243,255,0.5)] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer"
+              disabled={isSubmitting}
+              className="w-full py-4 rounded-xl font-cyber font-bold text-lg uppercase tracking-widest bg-[#00f3ff] hover:bg-[#33f6ff] disabled:opacity-50 disabled:cursor-wait text-black shadow-[0_0_25px_rgba(0,243,255,0.5)] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer"
             >
-              {t("lobby_create_submit")}
+              {isSubmitting ? t("room_creating") : t("lobby_create_submit")}
             </button>
           </form>
         )}
@@ -174,36 +285,55 @@ export const BattleLobbyModal = ({
         {/* 部屋参加フォーム */}
         {mode === "join" && (
           <form onSubmit={handleJoinRoom} className="flex flex-col gap-5">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs uppercase font-mono text-gray-400 tracking-wider">
-                {t("lobby_room_code_label")}
-              </label>
-              <input
-                type="text"
-                value={inputRoomId}
-                onChange={(e) => handleRoomIdChange(e.target.value)}
-                placeholder={t("lobby_room_code_placeholder")}
-                maxLength={7}
-                autoFocus
-                className="w-full px-4 py-3 rounded-xl bg-black/60 border border-gray-800 focus:border-[#00ff66] outline-none text-[#00ff66] text-xl font-mono font-bold tracking-widest text-center transition-colors placeholder:text-gray-700"
-              />
-              {error && (
-                <span className="text-xs text-[#ff0055] font-mono mt-1">
-                  {error}
-                </span>
-              )}
-            </div>
+            {inviteMode ? (
+              <p className="text-center font-mono text-sm text-[#00ff66]">
+                {t("invite_room_code", { code: formatRoomId(initialRoomId) })}
+              </p>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <label
+                  htmlFor="battle-room-code"
+                  className="text-xs uppercase font-mono text-gray-400 tracking-wider"
+                >
+                  {t("lobby_room_code_label")}
+                </label>
+                <input
+                  id="battle-room-code"
+                  type="text"
+                  value={inputRoomId}
+                  onChange={(e) => handleRoomIdChange(e.target.value)}
+                  placeholder={t("lobby_room_code_placeholder")}
+                  maxLength={7}
+                  autoFocus
+                  className="w-full px-4 py-3 rounded-xl bg-black/60 border border-gray-800 focus:border-[#00ff66] outline-none text-[#00ff66] text-xl font-mono font-bold tracking-widest text-center transition-colors placeholder:text-gray-700"
+                />
+              </div>
+            )}
 
-            <div className="p-3.5 rounded-xl bg-black/30 border border-gray-800/80 text-[11px] text-gray-400 leading-relaxed font-mono flex flex-col gap-1">
-              <div>・{t("lobby_join_instruction_code")}</div>
-              <div>・{t("lobby_join_instruction_start")}</div>
-            </div>
+            {!inviteMode && (
+              <div className="p-3.5 rounded-xl bg-black/30 border border-gray-800/80 text-[11px] text-gray-400 leading-relaxed font-mono flex flex-col gap-1">
+                <div>・{t("lobby_join_instruction_code")}</div>
+                <div>・{t("lobby_join_instruction_start")}</div>
+              </div>
+            )}
+            {inviteMode && (
+              <p className="text-center text-xs text-gray-400 font-mono">
+                {t("invite_name_confirmation")}
+              </p>
+            )}
+
+                    {error && (
+          <p className="text-xs text-[#ff0055] font-mono" role="alert">
+            {error}
+          </p>
+        )}
 
             <button
               type="submit"
-              className="w-full py-4 rounded-xl font-cyber font-bold text-lg uppercase tracking-widest bg-[#00ff66] hover:bg-[#33ff88] text-black shadow-[0_0_25px_rgba(0,255,102,0.5)] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer"
+              disabled={isSubmitting}
+              className="w-full py-4 rounded-xl font-cyber font-bold text-lg uppercase tracking-widest bg-[#00ff66] hover:bg-[#33ff88] disabled:opacity-50 disabled:cursor-wait text-black shadow-[0_0_25px_rgba(0,255,102,0.5)] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer"
             >
-              {t("lobby_join_submit")}
+              {isSubmitting ? t("room_joining") : t("lobby_join_submit")}
             </button>
           </form>
         )}

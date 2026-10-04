@@ -4,8 +4,14 @@ import { Heading } from "@/components/Heading";
 import {
   BattleLobbyModal,
   BattleSelectModal,
+  INITIAL_HP_DEFAULT,
   InitialHpOption,
 } from "@/features/battle";
+import {
+  createBattleRoom,
+  getBattleRoomRequest,
+  rememberBattleAdmission,
+} from "@/features/battle/utils/roomApi";
 import { GameStartLink } from "@/features/game";
 import { HOME_MODE_COOKIE } from "@/features/home/constants";
 import { Link, useRouter } from "@/i18n/routing";
@@ -26,14 +32,17 @@ export const HomeContent = ({
   initialMode = "single",
 }: HomeContentProps) => {
   const t = useTranslations("HomePage");
+  const tBattle = useTranslations("Battle");
   const router = useRouter();
   const searchParams = useSearchParams();
   const roomParam = searchParams.get("room");
 
   const [mode, setModeState] = useState<"single" | "battle">(initialMode);
-  const [lobbyModal, setLobbyModal] = useState<
-    "none" | "select" | "create" | "join"
-  >("none");
+  const [lobbyModal, setLobbyModal] = useState<"none" | "select" | "join">(
+    "none",
+  );
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+  const [createRoomError, setCreateRoomError] = useState(false);
   const hasAutoOpenedRef = useRef(false);
 
   // 選択したモードをCookieに保存し、次回のSSR時に初期表示へ反映する
@@ -56,8 +65,13 @@ export const HomeContent = ({
     isHost: boolean;
     initialHp: InitialHpOption;
     userName: string;
+    sessionId: string;
+    sessionToken: string;
+    role: "PLAYER_1" | "PLAYER_2" | "SPECTATOR";
+    isOwner: boolean;
   }) => {
     setLobbyModal("none");
+    rememberBattleAdmission(config);
     const params = new URLSearchParams();
     params.set("room", config.roomId);
     if (config.isHost) {
@@ -70,6 +84,39 @@ export const HomeContent = ({
       params.set("name", config.userName);
     }
     router.push(`/battle?${params.toString()}`);
+  };
+
+  const handleCreateRoom = async () => {
+    if (isCreatingRoom) return;
+    setIsCreatingRoom(true);
+    setCreateRoomError(false);
+    try {
+      const admission = await createBattleRoom(defaultUserName || "");
+      const config = {
+        roomId: admission.room.code,
+        isHost: admission.participant.isGameHost,
+        initialHp: INITIAL_HP_DEFAULT,
+        userName: admission.participant.userName,
+        sessionId: admission.credentials.sessionId,
+        sessionToken: admission.credentials.token,
+        role: admission.participant.role,
+        isOwner: admission.participant.isOwner,
+      };
+      rememberBattleAdmission(config);
+      const params = new URLSearchParams({
+        room: config.roomId,
+        confirm: "true",
+        hp: config.initialHp.toString(),
+      });
+      if (config.isHost) params.set("host", "true");
+      router.push(`/battle?${params.toString()}`);
+    } catch (error) {
+      console.error("Unable to create a battle room:", error);
+      setIsCreatingRoom(false);
+      setCreateRoomError(true);
+      return;
+    }
+    setLobbyModal("none");
   };
 
   return (
@@ -342,20 +389,60 @@ export const HomeContent = ({
       <BattleSelectModal
         isOpen={lobbyModal === "select"}
         onClose={() => setLobbyModal("none")}
-        onSelectCreate={() => setLobbyModal("create")}
+        onSelectCreate={() => void handleCreateRoom()}
         onSelectJoin={() => setLobbyModal("join")}
       />
 
-      {/* Battle Lobby Modals (Create / Join) */}
-      {(lobbyModal === "create" || lobbyModal === "join") && (
+      {(isCreatingRoom || createRoomError) && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4">
+          <div className="flex flex-col items-center gap-4 text-center">
+            {createRoomError ? (
+              <>
+                <p role="alert" className="text-sm text-[#ff0055]">
+                  {tBattle("room_request_failed")}
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setCreateRoomError(false)}
+                    className="rounded-xl border border-gray-600 px-4 py-2 text-white"
+                  >
+                    {tBattle("lobby_close")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleCreateRoom()}
+                    className="rounded-xl bg-[#00f3ff] px-4 py-2 font-bold text-black"
+                  >
+                    {tBattle("room_retry")}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="animate-pulse font-cyber tracking-widest text-[#00f3ff]">
+                {tBattle("room_creating")}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Battle Lobby Modal (Join) */}
+      {lobbyModal === "join" && (
         <BattleLobbyModal
           isOpen={true}
           onClose={() => setLobbyModal("none")}
           onBack={() => setLobbyModal("select")}
           onStartBattle={handleStartBattle}
+          onRoomCodeSubmit={async (roomCode) => {
+            await getBattleRoomRequest(roomCode);
+            setLobbyModal("none");
+            router.push(`/battle?room=${encodeURIComponent(roomCode)}`);
+          }}
           mode={lobbyModal}
           initialRoomId={roomParam || ""}
           defaultUserName={defaultUserName}
+          showNameInput={Boolean(roomParam)}
         />
       )}
     </>

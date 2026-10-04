@@ -1,9 +1,14 @@
 "use client";
 
 import { BattleLobbyModal } from "@/features/battle/components/BattleLobbyModal";
-import { InitialHpOption } from "@/features/battle/types";
+import { INITIAL_HP_DEFAULT, InitialHpOption } from "@/features/battle/types";
+import {
+  createBattleRoom,
+  rememberBattleAdmission,
+} from "@/features/battle/utils/roomApi";
 import { useRouter } from "@/i18n/routing";
 import { LogIn, PlusCircle, Swords } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
@@ -17,25 +22,65 @@ export const BattleLobbyTrigger = ({
   const router = useRouter();
   const searchParams = useSearchParams();
   const roomParam = searchParams.get("room");
+  const t = useTranslations("Battle");
 
-  const [activeModal, setActiveModal] = useState<"create" | "join" | null>(null);
+  const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+  const [createError, setCreateError] = useState(false);
   const hasAutoOpenedRef = useRef(false);
 
   // URLに ?room=... があれば自動的に参加専用モーダルを開く（初回の明示アクセス時のみ）
   useEffect(() => {
     if (roomParam && !hasAutoOpenedRef.current) {
       hasAutoOpenedRef.current = true;
-      setActiveModal("join");
+      setIsJoinModalOpen(true);
     }
   }, [roomParam]);
+
+  const handleCreateRoom = async () => {
+    if (isCreatingRoom) return;
+    setCreateError(false);
+    setIsCreatingRoom(true);
+    try {
+      const admission = await createBattleRoom(defaultUserName || "");
+      const config = {
+        roomId: admission.room.code,
+        isHost: admission.participant.isGameHost,
+        initialHp: INITIAL_HP_DEFAULT,
+        userName: admission.participant.userName,
+        sessionId: admission.credentials.sessionId,
+        sessionToken: admission.credentials.token,
+        role: admission.participant.role,
+        isOwner: admission.participant.isOwner,
+      };
+      rememberBattleAdmission(config);
+      const params = new URLSearchParams({
+        room: admission.room.code,
+        confirm: "true",
+      });
+      if (config.isHost) params.set("host", "true");
+      params.set("hp", config.initialHp.toString());
+      router.push(`/battle?${params.toString()}`);
+    } catch (error) {
+      console.error("Unable to create a battle room:", error);
+      setCreateError(true);
+    } finally {
+      setIsCreatingRoom(false);
+    }
+  };
 
   const handleStartBattle = (config: {
     roomId: string;
     isHost: boolean;
     initialHp: InitialHpOption;
     userName: string;
+    sessionId: string;
+    sessionToken: string;
+    role: "PLAYER_1" | "PLAYER_2" | "SPECTATOR";
+    isOwner: boolean;
   }) => {
-    setActiveModal(null);
+    setIsJoinModalOpen(false);
+    rememberBattleAdmission(config);
     const params = new URLSearchParams();
     params.set("room", config.roomId);
     if (config.isHost) {
@@ -61,34 +106,41 @@ export const BattleLobbyTrigger = ({
           {/* 部屋を作る 専用ボタン */}
           <button
             type="button"
-            onClick={() => setActiveModal("create")}
+            onClick={handleCreateRoom}
+            disabled={isCreatingRoom}
             className="flex items-center justify-center gap-2 py-3 px-3 rounded-xl bg-gradient-to-r from-[#00f3ff]/15 to-[#00f3ff]/5 border border-[#00f3ff]/50 hover:border-[#00f3ff] hover:bg-[#00f3ff]/20 text-[#00f3ff] font-cyber font-bold text-sm tracking-wider uppercase transition-all transform hover:scale-[1.02] active:scale-95 shadow-[0_0_15px_rgba(0,243,255,0.2)] cursor-pointer whitespace-nowrap"
           >
             <PlusCircle className="w-4 h-4 shrink-0" />
-            <span>部屋を作る</span>
+            <span>{isCreatingRoom ? t("room_creating") : "部屋を作る"}</span>
           </button>
 
           {/* 部屋に参加 専用ボタン */}
           <button
             type="button"
-            onClick={() => setActiveModal("join")}
+            onClick={() => setIsJoinModalOpen(true)}
             className="flex items-center justify-center gap-2 py-3 px-3 rounded-xl bg-gradient-to-r from-[#00ff66]/15 to-[#00ff66]/5 border border-[#00ff66]/50 hover:border-[#00ff66] hover:bg-[#00ff66]/20 text-[#00ff66] font-cyber font-bold text-sm tracking-wider uppercase transition-all transform hover:scale-[1.02] active:scale-95 shadow-[0_0_15px_rgba(0,255,102,0.2)] cursor-pointer whitespace-nowrap"
           >
             <LogIn className="w-4 h-4 shrink-0" />
             <span>部屋に参加</span>
           </button>
         </div>
+        {createError && (
+          <p className="text-center text-xs text-[#ff0055] font-mono" role="alert">
+            {t("room_request_failed")}
+          </p>
+        )}
       </div>
 
-      {/* それぞれのボタンに応じた専用ダイアログ */}
-      {activeModal && (
+      {/* 参加時はコード入力のみをトップ画面で受け付ける */}
+      {isJoinModalOpen && (
         <BattleLobbyModal
           isOpen={true}
-          onClose={() => setActiveModal(null)}
+          onClose={() => setIsJoinModalOpen(false)}
           onStartBattle={handleStartBattle}
-          mode={activeModal}
+          mode="join"
           initialRoomId={roomParam || ""}
           defaultUserName={defaultUserName}
+          showNameInput={false}
         />
       )}
     </>

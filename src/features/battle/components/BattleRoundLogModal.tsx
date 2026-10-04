@@ -7,6 +7,8 @@ import { useTranslations } from "next-intl";
 type BattleRoundLogModalProps = {
   isOpen: boolean;
   logs: BattleRoundLog[];
+  isSpectator?: boolean;
+  playerName?: string;
   opponentName?: string;
   onClose: () => void;
 };
@@ -14,6 +16,8 @@ type BattleRoundLogModalProps = {
 export const BattleRoundLogModal = ({
   isOpen,
   logs,
+  isSpectator = false,
+  playerName,
   opponentName,
   onClose,
 }: BattleRoundLogModalProps) => {
@@ -64,6 +68,19 @@ export const BattleRoundLogModal = ({
               const isPlayerWin = log.winner === "player";
               const isOpponentWin = log.winner === "opponent";
               const isRoundDraw = log.winner === "draw";
+              const playerNameClass = isRoundDraw
+                ? "text-gray-400"
+                : isPlayerWin
+                  ? "text-[#00f3ff]"
+                  : "text-[#ff0055]";
+              const opponentNameClass = isRoundDraw
+                ? "text-gray-400"
+                : isOpponentWin
+                  ? "text-[#00f3ff]"
+                  : "text-[#ff0055]";
+              const roundWinnerName = isPlayerWin
+                ? (playerName ?? t("log_you"))
+                : (opponentName ?? t("log_opponent"));
 
               return (
                 <div
@@ -92,18 +109,22 @@ export const BattleRoundLogModal = ({
                             : "bg-gray-700/50 text-gray-300 border border-gray-600"
                       }`}
                     >
-                      {isPlayerWin
-                        ? t("log_player_win")
-                        : isOpponentWin
-                          ? t("log_opponent_win")
-                          : t("log_draw")}
+                      {isSpectator && !isRoundDraw
+                        ? t("log_named_win", { name: roundWinnerName })
+                        : isPlayerWin
+                          ? t("log_player_win")
+                          : isOpponentWin
+                            ? t("log_opponent_win")
+                            : t("log_draw")}
                     </span>
                   </div>
 
                   <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 py-1 text-xs">
                     <div className="flex flex-col gap-1">
-                      <span className="text-[10px] text-gray-400 font-bold truncate">
-                        {t("log_you")}
+                      <span
+                        className={`text-[10px] font-bold truncate ${playerNameClass}`}
+                      >
+                        {playerName || t("log_you")}
                       </span>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span
@@ -144,7 +165,9 @@ export const BattleRoundLogModal = ({
                     </div>
 
                     <div className="flex flex-col gap-1 text-right">
-                      <span className="text-[10px] text-gray-400 font-bold truncate">
+                      <span
+                        className={`text-[10px] font-bold truncate ${opponentNameClass}`}
+                      >
                         {opponentName === "Opponent"
                           ? t("log_opponent")
                           : opponentName || t("log_opponent")}

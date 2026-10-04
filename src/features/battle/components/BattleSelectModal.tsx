@@ -52,20 +52,20 @@ export const BattleSelectModal = ({
           <button
             type="button"
             onClick={onSelectCreate}
-            className="group relative p-5 rounded-2xl bg-gradient-to-r from-[#00f3ff]/10 to-transparent hover:from-[#00f3ff]/20 border border-[#00f3ff]/40 hover:border-[#00f3ff] transition-all duration-300 text-left flex items-center justify-between shadow-[0_0_20px_rgba(0,243,255,0.1)] hover:shadow-[0_0_25px_rgba(0,243,255,0.3)] hover:scale-[1.02] active:scale-98 cursor-pointer"
+            className="group relative p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-[#00f3ff]/10 to-transparent hover:from-[#00f3ff]/20 border border-[#00f3ff]/40 hover:border-[#00f3ff] transition-all duration-300 text-left flex items-center justify-between shadow-[0_0_20px_rgba(0,243,255,0.1)] hover:shadow-[0_0_25px_rgba(0,243,255,0.3)] hover:scale-[1.02] active:scale-98 cursor-pointer"
           >
-            <div className="flex items-start gap-4">
-              <div className="p-3 rounded-xl bg-[#00f3ff]/10 text-[#00f3ff] border border-[#00f3ff]/30 group-hover:scale-110 transition-transform">
-                <PlusCircle className="w-6 h-6" />
+            <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+              <div className="shrink-0 rounded-xl border border-[#00f3ff]/30 bg-[#00f3ff]/10 p-2.5 text-[#00f3ff] transition-transform group-hover:scale-110 sm:p-3">
+                <PlusCircle className="h-5 w-5 sm:h-6 sm:w-6" />
               </div>
-              <div className="flex flex-col">
-                <span className="font-cyber font-bold text-lg md:text-xl text-white group-hover:text-[#00f3ff] transition-colors flex items-center gap-2">
+              <div className="flex min-w-0 flex-col">
+                <span className="flex items-center gap-1.5 whitespace-nowrap font-cyber text-base font-bold text-white transition-colors group-hover:text-[#00f3ff] sm:gap-2 sm:text-xl">
                   {t("create_room_card_title")}
-                  <span className="text-[10px] font-mono tracking-widest px-2 py-0.5 rounded bg-[#00f3ff]/20 text-[#00f3ff] border border-[#00f3ff]/30 uppercase">
+                  <span className="shrink-0 rounded border border-[#00f3ff]/30 bg-[#00f3ff]/20 px-1.5 py-0.5 font-mono text-[9px] tracking-widest text-[#00f3ff] uppercase sm:px-2 sm:text-[10px]">
                     HOST
                   </span>
                 </span>
-                <span className="text-xs md:text-sm text-gray-400 font-mono mt-1">
+                <span className="mt-1 text-[11px] font-mono text-gray-400 sm:text-sm">
                   {t("create_room_card_desc")}
                 </span>
               </div>
@@ -77,20 +77,20 @@ export const BattleSelectModal = ({
           <button
             type="button"
             onClick={onSelectJoin}
-            className="group relative p-5 rounded-2xl bg-gradient-to-r from-[#00ff66]/10 to-transparent hover:from-[#00ff66]/20 border border-[#00ff66]/40 hover:border-[#00ff66] transition-all duration-300 text-left flex items-center justify-between shadow-[0_0_20px_rgba(0,255,102,0.1)] hover:shadow-[0_0_25px_rgba(0,255,102,0.3)] hover:scale-[1.02] active:scale-98 cursor-pointer"
+            className="group relative p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-[#00ff66]/10 to-transparent hover:from-[#00ff66]/20 border border-[#00ff66]/40 hover:border-[#00ff66] transition-all duration-300 text-left flex items-center justify-between shadow-[0_0_20px_rgba(0,255,102,0.1)] hover:shadow-[0_0_25px_rgba(0,255,102,0.3)] hover:scale-[1.02] active:scale-98 cursor-pointer"
           >
-            <div className="flex items-start gap-4">
-              <div className="p-3 rounded-xl bg-[#00ff66]/10 text-[#00ff66] border border-[#00ff66]/30 group-hover:scale-110 transition-transform">
-                <LogIn className="w-6 h-6" />
+            <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+              <div className="shrink-0 rounded-xl border border-[#00ff66]/30 bg-[#00ff66]/10 p-2.5 text-[#00ff66] transition-transform group-hover:scale-110 sm:p-3">
+                <LogIn className="h-5 w-5 sm:h-6 sm:w-6" />
               </div>
-              <div className="flex flex-col">
-                <span className="font-cyber font-bold text-lg md:text-xl text-white group-hover:text-[#00ff66] transition-colors flex items-center gap-2">
+              <div className="flex min-w-0 flex-col">
+                <span className="flex items-center gap-1.5 whitespace-nowrap font-cyber text-base font-bold text-white transition-colors group-hover:text-[#00ff66] sm:gap-2 sm:text-xl">
                   {t("join_room_card_title")}
-                  <span className="text-[10px] font-mono tracking-widest px-2 py-0.5 rounded bg-[#00ff66]/20 text-[#00ff66] border border-[#00ff66]/30 uppercase">
+                  <span className="shrink-0 rounded border border-[#00ff66]/30 bg-[#00ff66]/20 px-1.5 py-0.5 font-mono text-[9px] tracking-widest text-[#00ff66] uppercase sm:px-2 sm:text-[10px]">
                     GUEST
                   </span>
                 </span>
-                <span className="text-xs md:text-sm text-gray-400 font-mono mt-1">
+                <span className="mt-1 text-[11px] font-mono text-gray-400 sm:text-sm">
                   {t("join_room_card_desc")}
                 </span>
               </div>

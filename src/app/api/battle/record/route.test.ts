@@ -1,4 +1,5 @@
 import { POST } from "@/app/api/battle/record/route";
+import { authorizeBattleResult } from "@/features/battle/server/rooms";
 import { prisma } from "@/lib/prisma";
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest } from "next/server";
@@ -18,6 +19,12 @@ vi.mock("@/lib/prisma", () => ({
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(),
+}));
+
+vi.mock("@/features/battle/server/rooms", () => ({
+  authorizeBattleResult: vi.fn().mockResolvedValue({ participantUserId: null }),
+  battleRoomErrorResponse: (error: unknown) =>
+    Response.json({ error: String(error) }, { status: 500 }),
 }));
 
 describe("POST /api/battle/record", () => {
@@ -47,6 +54,8 @@ describe("POST /api/battle/record", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         roomId: "389-102",
+        sessionId: "session-1",
+        sessionToken: "session-secret",
         result: "win",
         remainingHp: 650.5,
         rounds: 3,
@@ -61,6 +70,9 @@ describe("POST /api/battle/record", () => {
   });
 
   it("increments battlePlayCount and battleWinCount for logged in user", async () => {
+    vi.mocked(authorizeBattleResult).mockResolvedValue({
+      participantUserId: "user_abc",
+    });
     vi.mocked(createClient).mockResolvedValue({
       auth: {
         getUser: () => Promise.resolve({ data: { user: { id: "user_abc" } } }),
@@ -81,6 +93,8 @@ describe("POST /api/battle/record", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         roomId: "389-102",
+        sessionId: "session-1",
+        sessionToken: "session-secret",
         result: "win",
         remainingHp: 400,
         rounds: 2,
@@ -108,6 +122,8 @@ describe("POST /api/battle/record", () => {
       },
       body: JSON.stringify({
         roomId: "389-102",
+        sessionId: "session-1",
+        sessionToken: "session-secret",
         result: "win",
         remainingHp: 400,
       }),

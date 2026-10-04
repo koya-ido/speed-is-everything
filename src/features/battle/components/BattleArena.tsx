@@ -2,8 +2,11 @@
 
 import { BattleMatchResultModal } from "@/features/battle/components/BattleMatchResultModal";
 import { BattleRoundLogModal } from "@/features/battle/components/BattleRoundLogModal";
+import { BattleSessionExpiredModal } from "@/features/battle/components/BattleSessionExpiredModal";
+import { RoomDissolveConfirmationModal } from "@/features/battle/components/RoomDissolveConfirmationModal";
 import { useBattleRoom } from "@/features/battle/hooks/useBattleRoom";
 import {
+  BattleRoomRole,
   getInitialHpTier,
   INITIAL_HP_MAX,
   INITIAL_HP_MIN,
@@ -17,6 +20,10 @@ import {
   getActiveComboMultiplier,
 } from "@/features/battle/utils/battleLogic";
 import {
+  getActivePlayerNames,
+  getBattleLogPlayerNames,
+} from "@/features/battle/utils/roomPresentation";
+import {
   ParticleCanvas,
   ParticleCanvasHandle,
   soundManager,
@@ -24,6 +31,7 @@ import {
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
   Copy,
   Crown,
   Flame,
@@ -53,6 +61,10 @@ type BattleArenaProps = {
   initialHp?: InitialHpOption;
   userId?: string;
   userName?: string;
+  sessionId: string;
+  sessionToken: string;
+  role: BattleRoomRole;
+  isOwner: boolean;
   onExit?: () => void;
 };
 
@@ -72,17 +84,28 @@ export const BattleArena = ({
   initialHp: requestedHp = 1500,
   userId,
   userName,
+  sessionId,
+  sessionToken,
+  role: initialRole,
+  isOwner: initialIsOwner,
   onExit,
 }: BattleArenaProps) => {
   const t = useTranslations("Battle");
   const {
     isHost,
+    role,
+    participants,
+    spectatorCount,
+    queuePosition,
+    roomEnded,
+    sessionExpired,
     promotedToHost,
     phase,
     initialHp,
     changeInitialHp,
     myReaction,
     opponentReaction,
+    spectatorReaction,
     sendReaction,
     currentRound,
     countdown,
@@ -103,6 +126,8 @@ export const BattleArena = ({
     requestRematch,
     returnToLobby,
     leaveRoom,
+    dissolveRoom,
+    rotateToSpectator,
     roundLogs,
   } = useBattleRoom({
     roomId,
@@ -110,13 +135,39 @@ export const BattleArena = ({
     initialHp: requestedHp,
     userId,
     userName,
+    sessionId,
+    sessionToken,
+    role: initialRole,
+    isOwner: initialIsOwner,
   });
+  const activePlayerNames = getActivePlayerNames(participants);
+  const battleLogPlayerNames = getBattleLogPlayerNames(participants);
+  const leftCardName =
+    role === "SPECTATOR" ? activePlayerNames.playerOneName : player.userName;
+  const rightCardName =
+    role === "SPECTATOR"
+      ? activePlayerNames.playerTwoName
+      : (opponent?.userName ?? null);
+  const connectedSpectators = participants
+    .filter(
+      (participant) =>
+        participant.role === "SPECTATOR" && participant.connected,
+    )
+    .sort((left, right) => left.joinOrder - right.joinOrder);
+  const latestReactionBySpectator = new Map(
+    spectatorReaction.map((reaction) => [reaction.senderId, reaction]),
+  );
 
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [spectatorAccordionOpen, setSpectatorAccordionOpen] = useState(false);
   const [reactionButtonsDisabled, setReactionButtonsDisabled] = useState(false);
   const [showBattleLog, setShowBattleLog] = useState(false);
   const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [roomActionError, setRoomActionError] = useState<string | null>(null);
+  const [showDissolveConfirmation, setShowDissolveConfirmation] =
+    useState(false);
+  const [isDissolvingRoom, setIsDissolvingRoom] = useState(false);
   const [animStage, setAnimStage] = useState<AnimStage>("STOP");
   const [activeStep, setActiveStep] = useState<number>(0);
   const [displayMainNum, setDisplayMainNum] = useState<number>(0);
@@ -137,6 +188,7 @@ export const BattleArena = ({
     if (reactionCooldownTimerRef.current) {
       clearTimeout(reactionCooldownTimerRef.current);
     }
+
     reactionCooldownTimerRef.current = setTimeout(() => {
       setReactionButtonsDisabled(false);
       reactionCooldownTimerRef.current = null;
@@ -226,8 +278,33 @@ export const BattleArena = ({
   };
 
   const handleExit = () => {
-    leaveRoom();
+    if (!roomEnded && !sessionExpired) leaveRoom();
     onExit?.();
+  };
+
+  const handleDissolveRoom = async () => {
+    setRoomActionError(null);
+    setIsDissolvingRoom(true);
+    try {
+      await dissolveRoom();
+      setShowDissolveConfirmation(false);
+      onExit?.();
+    } catch (error) {
+      console.error("Unable to dissolve the battle room:", error);
+      setRoomActionError(t("room_request_failed"));
+    } finally {
+      setIsDissolvingRoom(false);
+    }
+  };
+
+  const handleRotateToSpectator = async () => {
+    setRoomActionError(null);
+    try {
+      await rotateToSpectator();
+    } catch (error) {
+      console.error("Unable to join the spectator queue:", error);
+      setRoomActionError(t("room_request_failed"));
+    }
   };
 
   // 入力イベント実行共通処理（GameCanvas完全準拠）
@@ -782,7 +859,9 @@ export const BattleArena = ({
       break;
     case "WAITING":
       bgEffect = "bg-[#050505] shadow-[inset_0_0_150px_rgba(255,0,0,0.15)]";
-      mainActionText = t("state_waiting");
+      mainActionText = player.currentRoundFoul
+        ? t("hud_foul")
+        : t("state_waiting");
       textColor = "text-red-500";
       textShadow = "drop-shadow-[0_0_15px_rgba(239,68,68,0.8)]";
       ringColor = "stroke-red-500";
@@ -863,6 +942,32 @@ export const BattleArena = ({
       break;
   }
 
+  if (sessionExpired) {
+    return <BattleSessionExpiredModal onReturnToTop={handleExit} />;
+  }
+
+  if (roomEnded) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-[#050508] p-6 text-center">
+        <div className="glass-panel max-w-lg rounded-3xl border border-[#ff0055]/40 p-8">
+          <h1 className="text-xl font-cyber font-bold text-white">
+            {t("room_invalid")}
+          </h1>
+          <p className="mt-3 text-sm text-gray-400">
+            {t("room_ended_message")}
+          </p>
+          <button
+            type="button"
+            onClick={handleExit}
+            className="mt-6 rounded-xl bg-[#00f3ff] px-6 py-3 font-bold text-black"
+          >
+            {t("room_back_to_lobby")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`relative w-full ${phase === "LOBBY" ? "min-h-dvh" : "h-screen max-h-screen overflow-hidden touch-none"} ${bgEffect} text-white flex flex-col select-none`}
@@ -883,7 +988,89 @@ export const BattleArena = ({
         triggerUserAction(e);
       }}
     >
+      {isHost && phase === "LOBBY" && (
+        <button
+          type="button"
+          onClick={() => setShowDissolveConfirmation(true)}
+          className="fixed left-3 top-3 z-[70] rounded-lg border border-[#ff0055]/50 bg-black/80 px-3 py-2 text-[10px] font-mono text-[#ff6b91] hover:bg-[#ff0055]/15"
+        >
+          {t("room_dissolve")}
+        </button>
+      )}
+      {isHost && phase === "LOBBY" && showDissolveConfirmation && (
+        <RoomDissolveConfirmationModal
+          isPending={isDissolvingRoom}
+          onCancel={() => setShowDissolveConfirmation(false)}
+          onConfirm={() => void handleDissolveRoom()}
+        />
+      )}
+      {roomActionError && (
+        <div
+          role="alert"
+          className="fixed left-1/2 top-14 z-50 -translate-x-1/2 rounded-lg border border-[#ff0055]/40 bg-black/90 px-4 py-2 text-xs text-[#ff6b91]"
+        >
+          {roomActionError}
+        </div>
+      )}
+      {phase !== "LOBBY" && spectatorReaction.length > 0 && (
+        <div className="pointer-events-none fixed inset-0 z-30 overflow-hidden">
+          {spectatorReaction.map((reaction) => (
+            <span
+              key={reaction.id}
+              role="img"
+              aria-label={`${reaction.userName}: ${t("reaction_aria_label", { emoji: reaction.emoji })}`}
+              className="fixed bottom-16 text-3xl opacity-50 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]"
+              style={{
+                left: `${reaction.horizontalPosition}%`,
+                animation: "spectator-stamp-float 4000ms linear forwards",
+              }}
+            >
+              {reaction.emoji}
+            </span>
+          ))}
+        </div>
+      )}
+      {phase !== "LOBBY" && role === "SPECTATOR" && (
+        <div className="pointer-events-none fixed bottom-4 left-1/2 z-40 flex -translate-x-1/2 flex-col items-center gap-2">
+          <div className="rounded-full border border-[#00f3ff]/25 bg-black/70 px-4 py-1.5 text-center text-xs font-mono text-[#00f3ff]/75">
+            {t("spectator_watching", { position: queuePosition })}
+          </div>
+          <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-gray-700/70 bg-black/75 px-2 py-1">
+            {REACTION_EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                aria-label={t("reaction_aria_label", { emoji })}
+                disabled={reactionButtonsDisabled}
+                onPointerDown={(event) => event.stopPropagation()}
+                onPointerUp={(event) => event.stopPropagation()}
+                onClick={() => handleReactionClick(emoji)}
+                className="h-8 w-8 rounded-full text-lg text-white/75 hover:bg-[#00f3ff]/15 focus-visible:outline-2 focus-visible:outline-[#00f3ff] disabled:opacity-40"
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <style>{`
+        @keyframes spectator-stamp-float {
+          0% { transform: translate(-50%, 0); opacity: 0.5; }
+          80% { transform: translate(-50%, -100vh); opacity: 0.5; }
+          100% { transform: translate(-50%, -100vh); opacity: 0; }
+        }
+        @keyframes spectator-stamp-pop {
+          0% { transform: translateY(65%) scale(0.65); opacity: 0; }
+          70% { transform: translateY(-10%) scale(1.15); opacity: 1; }
+          100% { transform: translateY(0) scale(1); opacity: 1; }
+        }
+        @keyframes spectator-stamp-lobby {
+          0% { transform: translateY(65%) scale(0.65); opacity: 0; }
+          12% { transform: translateY(-10%) scale(1.15); opacity: 1; }
+          18% { transform: translateY(0) scale(1); opacity: 1; }
+          82% { transform: translateY(0) scale(1); opacity: 1; }
+          100% { transform: translateY(-8%) scale(0.96); opacity: 0; }
+        }
         @keyframes game-shake {
           0%, 100% { transform: translate(0, 0) rotate(0deg); }
           25% { transform: translate(-10px, 10px) rotate(-1deg); }
@@ -1119,46 +1306,50 @@ export const BattleArena = ({
               </div>
             )}
 
-            {/* ルームコード表示 */}
-            <div className="flex flex-col items-center gap-2 w-full">
-              <span className="text-xs uppercase tracking-widest text-gray-400 font-mono">
-                {t("room_code")}
-              </span>
-              <div
-                onClick={() => copyToClipboard("code")}
-                className="cursor-pointer group flex items-center gap-3 px-6 py-3 rounded-xl bg-black/50 border border-[#00f3ff]/40 hover:border-[#00f3ff] transition-all hover:scale-105 shadow-[0_0_15px_rgba(0,243,255,0.2)]"
-              >
-                <span className="text-3xl md:text-5xl font-mono font-bold tracking-widest text-[#00f3ff] group-hover:text-white transition-colors">
-                  {roomId}
-                </span>
-                {copiedCode ? (
-                  <Check className="w-6 h-6 text-[#00ff66]" />
-                ) : (
-                  <Copy className="w-6 h-6 text-gray-400 group-hover:text-[#00f3ff]" />
-                )}
-              </div>
-              <span className="text-[11px] text-gray-500">
-                {t("copy_room_code_hint")}
-              </span>
-            </div>
+            {isHost && (
+              <>
+                {/* ルームコード表示 */}
+                <div className="flex flex-col items-center gap-2 w-full">
+                  <span className="text-xs uppercase tracking-widest text-gray-400 font-mono">
+                    {t("room_code")}
+                  </span>
+                  <div
+                    onClick={() => copyToClipboard("code")}
+                    className="cursor-pointer group flex items-center gap-3 px-6 py-3 rounded-xl bg-black/50 border border-[#00f3ff]/40 hover:border-[#00f3ff] transition-all hover:scale-105 shadow-[0_0_15px_rgba(0,243,255,0.2)]"
+                  >
+                    <span className="text-3xl md:text-5xl font-mono font-bold tracking-widest text-[#00f3ff] group-hover:text-white transition-colors">
+                      {roomId}
+                    </span>
+                    {copiedCode ? (
+                      <Check className="w-6 h-6 text-[#00ff66]" />
+                    ) : (
+                      <Copy className="w-6 h-6 text-gray-400 group-hover:text-[#00f3ff]" />
+                    )}
+                  </div>
+                  <span className="text-[11px] text-gray-500">
+                    {t("copy_room_code_hint")}
+                  </span>
+                </div>
 
-            {/* 招待リンクコピーボタン */}
-            <button
-              onClick={() => copyToClipboard("link")}
-              className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[#00f3ff]/10 border border-[#00f3ff]/30 hover:bg-[#00f3ff]/20 text-[#00f3ff] font-bold text-sm tracking-wide transition-all active:scale-95 cursor-pointer"
-            >
-              {copiedLink ? (
-                <>
-                  <Check className="w-4 h-4 text-[#00ff66]" />
-                  <span>{t("link_copied")}</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-4 h-4" />
-                  <span>{t("copy_link")}</span>
-                </>
-              )}
-            </button>
+                {/* 招待リンクコピーボタン */}
+                <button
+                  onClick={() => copyToClipboard("link")}
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[#00f3ff]/10 border border-[#00f3ff]/30 hover:bg-[#00f3ff]/20 text-[#00f3ff] font-bold text-sm tracking-wide transition-all active:scale-95 cursor-pointer"
+                >
+                  {copiedLink ? (
+                    <>
+                      <Check className="w-4 h-4 text-[#00ff66]" />
+                      <span>{t("link_copied")}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4" />
+                      <span>{t("copy_link")}</span>
+                    </>
+                  )}
+                </button>
+              </>
+            )}
 
             {/* プレイヤー VS 対戦相手 ステータスカード */}
             <div className="relative grid grid-cols-2 gap-4 w-full items-stretch">
@@ -1180,14 +1371,16 @@ export const BattleArena = ({
                 </div>
                 <div className="relative inline-flex max-w-full items-center justify-center">
                   <div className="font-bold text-base truncate max-w-30 md:max-w-none text-center">
-                    {player.userName}
+                    {leftCardName || t("waiting_opponent")}
                   </div>
                   <span className="absolute left-full ml-1.5 top-1/2 -translate-y-1/2 text-xl leading-none w-6 h-6 inline-flex items-center justify-center animate-in zoom-in duration-150">
                     {myReaction}
                   </span>
                 </div>
                 <span className="text-[10px] uppercase px-2 py-0.5 rounded bg-[#00f3ff]/20 text-[#00f3ff] border border-[#00f3ff]/40 font-mono">
-                  {t(isHost ? "role_host" : "role_guest")} ({t("label_you")})
+                  {role === "SPECTATOR"
+                    ? t("player_one")
+                    : `${t(isHost ? "role_host" : "role_guest")} (${t("label_you")})`}
                 </span>
               </div>
 
@@ -1199,22 +1392,22 @@ export const BattleArena = ({
               {/* 相手 */}
               <div
                 className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all ${
-                  opponent
+                  rightCardName
                     ? "bg-black/40 border border-[#ff0055]/50"
                     : "bg-black/20 border border-dashed border-gray-700 animate-pulse"
                 }`}
               >
-                {opponent ? (
+                {rightCardName ? (
                   <>
                     <div className="flex items-center gap-2 text-[#ff0055]">
-                      {opponent.device === "mobile" ? (
+                      {opponent?.device === "mobile" ? (
                         <Smartphone className="w-5 h-5" />
                       ) : (
                         <Monitor className="w-5 h-5" />
                       )}
                       <span className="text-xs uppercase font-mono">
                         {t(
-                          opponent.device === "mobile"
+                          opponent?.device === "mobile"
                             ? "device_mobile"
                             : "device_desktop",
                         )}
@@ -1222,14 +1415,16 @@ export const BattleArena = ({
                     </div>
                     <div className="relative inline-flex max-w-full items-center justify-center">
                       <div className="font-bold text-base truncate max-w-30 md:max-w-none text-center text-[#ff0055]">
-                        {opponent.userName}
+                        {rightCardName}
                       </div>
                       <span className="absolute left-full ml-1.5 top-1/2 -translate-y-1/2 text-xl leading-none w-6 h-6 inline-flex items-center justify-center animate-in zoom-in duration-150">
                         {opponentReaction}
                       </span>
                     </div>
                     <span className="text-[10px] uppercase px-2 py-0.5 rounded bg-[#ff0055]/20 text-[#ff0055] border border-[#ff0055]/40 font-mono">
-                      {t(opponent.isHost ? "role_host" : "role_guest")}
+                      {role === "SPECTATOR"
+                        ? t("player_two")
+                        : t(opponent?.isHost ? "role_host" : "role_guest")}
                     </span>
                   </>
                 ) : (
@@ -1298,6 +1493,102 @@ export const BattleArena = ({
               </div>
             </div>
 
+            {(role === "SPECTATOR" ||
+              spectatorCount > 0 ||
+              spectatorReaction.length > 0) && (
+              <section className="relative w-full">
+                {!spectatorAccordionOpen && spectatorReaction.length > 0 && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className="absolute left-1/2 top-0 z-10 flex max-w-full -translate-x-1/2 -translate-y-1/2 gap-1 overflow-x-auto px-4 py-4"
+                  >
+                    {spectatorReaction.map((reaction, index) => (
+                      <span
+                        key={reaction.id}
+                        role="img"
+                        aria-label={`${reaction.userName}: ${t("reaction_aria_label", { emoji: reaction.emoji })}`}
+                        className="shrink-0 rounded-full border border-yellow-400/30 bg-black/95 px-2 py-1 text-xl shadow-[0_2px_6px_rgba(0,0,0,0.65),0_0_5px_rgba(250,204,21,0.16)]"
+                        style={{
+                          animation:
+                            "spectator-stamp-lobby 2000ms cubic-bezier(.2,.8,.3,1.2) both",
+                          animationDelay: `${index * 45}ms`,
+                        }}
+                      >
+                        {reaction.emoji}
+                      </span>
+                      ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  aria-expanded={spectatorAccordionOpen}
+                  aria-controls="lobby-spectator-list"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onPointerUp={(event) => event.stopPropagation()}
+                  onClick={() => setSpectatorAccordionOpen((isOpen) => !isOpen)}
+                  className="flex min-h-14 w-full items-center justify-between rounded-xl border border-[#00f3ff]/30 bg-black/40 px-4 py-3 text-left transition-colors hover:bg-[#00f3ff]/5 focus-visible:outline-2 focus-visible:outline-[#00f3ff]"
+                >
+                  <span className="font-cyber text-sm font-bold text-[#00f3ff]">
+                    {t("spectators_waiting", { count: spectatorCount })}
+                  </span>
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={`h-4 w-4 shrink-0 text-[#00f3ff] transition-transform ${
+                      spectatorAccordionOpen ? "rotate-180" : ""
+                    }`}
+                  />
+                </button>
+                <div
+                  id="lobby-spectator-list"
+                  hidden={!spectatorAccordionOpen}
+                  className="mt-2 rounded-xl border border-gray-800 bg-black/30 p-3"
+                >
+                  {role === "SPECTATOR" && (
+                    <div className="mb-2 text-xs text-gray-400">
+                      <p className="font-bold text-[#00f3ff]">
+                        {t("spectator_waiting", { position: queuePosition })}
+                      </p>
+                      <p>{t("spectator_no_match")}</p>
+                    </div>
+                  )}
+                  {connectedSpectators.length > 0 ? (
+                    <ul className="flex flex-col gap-1">
+                      {connectedSpectators.map((spectator) => {
+                        const reaction = latestReactionBySpectator.get(
+                          spectator.sessionId,
+                        );
+                        return (
+                          <li
+                            key={spectator.sessionId}
+                            className="flex min-h-9 items-center justify-between rounded-lg bg-white/5 px-3 py-1 text-sm text-gray-200"
+                          >
+                            <span className="truncate">
+                              {spectator.userName}
+                            </span>
+                            {reaction && (
+                              <span
+                                aria-label={t("reaction_aria_label", {
+                                  emoji: reaction.emoji,
+                                })}
+                                className="ml-3 shrink-0 text-xl"
+                              >
+                                {reaction.emoji}
+                              </span>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <p className="text-center text-xs text-gray-500">
+                      {t("spectators_waiting", { count: 0 })}
+                    </p>
+                  )}
+                </div>
+              </section>
+            )}
+
             {/* リアクションスタンプ */}
             <div className="w-full flex items-center justify-center gap-2 p-3 rounded-xl bg-black/40 border border-gray-800">
               {REACTION_EMOJIS.map((emoji) => (
@@ -1317,7 +1608,11 @@ export const BattleArena = ({
             </div>
 
             {/* 開始ボタン（ホストのみ） */}
-            {isHost ? (
+            {role === "SPECTATOR" ? (
+              <div className="text-center text-sm font-mono text-gray-400">
+                {t("spectator_reaction_hint")}
+              </div>
+            ) : isHost ? (
               <button
                 disabled={!opponent}
                 onClick={handleStartMatch}
@@ -1342,6 +1637,15 @@ export const BattleArena = ({
               >
                 <LogOut className="w-3.5 h-3.5" />
                 {t("leave_lobby")}
+              </button>
+            )}
+            {role !== "SPECTATOR" && spectatorCount > 0 && (
+              <button
+                type="button"
+                onClick={handleRotateToSpectator}
+                className="w-full rounded-xl border border-yellow-400/50 bg-yellow-400/10 py-3 text-sm font-bold text-yellow-200 hover:bg-yellow-400/20"
+              >
+                {t("become_spectator", { count: spectatorCount })}
               </button>
             )}
           </div>
@@ -1591,6 +1895,14 @@ export const BattleArena = ({
               </div>
             </div>
           </div>
+
+          {role === "SPECTATOR" && (
+            <div className="z-20 flex justify-center py-2">
+              <span className="rounded-full border border-[#00f3ff]/50 bg-black/65 px-4 py-1 text-[10px] font-mono uppercase tracking-wider text-[#00f3ff]/90">
+                {t("spectator_live_badge")}
+              </span>
+            </div>
+          )}
 
           {/* ======================================================== */}
           {/* 中央メインエリア: 通常GameCanvasと同一の円形HUD測定UI */}
@@ -1870,15 +2182,23 @@ export const BattleArena = ({
 
                 {phase === "WAITING" && (
                   <div className="flex flex-col items-center justify-center">
-                    <span className="text-gray-400 font-cyber text-xs uppercase tracking-[0.3em] mb-1">
-                      {t("hud_status")}
-                    </span>
-                    <span className="font-cyber font-bold text-3xl md:text-4xl text-red-500 drop-shadow-[0_0_15px_rgba(239,68,68,0.9)]">
-                      {t("hud_locked")}
-                    </span>
-                    <span className="text-[10px] text-gray-500 font-mono mt-1">
-                      {t("hud_false_start_warning")}
-                    </span>
+                    {player.currentRoundFoul ? (
+                      <span className="font-cyber font-black text-4xl md:text-5xl text-red-500 drop-shadow-[0_0_18px_rgba(239,68,68,0.9)]">
+                        {t("hud_foul")}
+                      </span>
+                    ) : (
+                      <>
+                        <span className="text-gray-400 font-cyber text-xs uppercase tracking-[0.3em] mb-1">
+                          {t("hud_status")}
+                        </span>
+                        <span className="font-cyber font-bold text-3xl md:text-4xl text-red-500 drop-shadow-[0_0_15px_rgba(239,68,68,0.9)]">
+                          {t("hud_locked")}
+                        </span>
+                        <span className="text-[10px] text-gray-500 font-mono mt-1">
+                          {t("hud_false_start_warning")}
+                        </span>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -2018,6 +2338,7 @@ export const BattleArena = ({
 
       <BattleMatchResultModal
         isOpen={phase === "MATCH_FINISHED"}
+        isSpectator={role === "SPECTATOR"}
         winner={matchWinner}
         finishReason={matchFinishReason}
         player={player}
@@ -2025,15 +2346,26 @@ export const BattleArena = ({
         opponentReturnedToLobby={opponentReturnedToLobby}
         rematchRequestedByMe={rematchRequestedByMe}
         rematchRequestedByOpponent={rematchRequestedByOpponent}
+        spectatorCount={spectatorCount}
         onOpenBattleLog={() => setShowBattleLog(true)}
         onRequestRematch={requestRematch}
-        onReturnToLobby={returnToLobby}
+        onReturnToLobby={role === "SPECTATOR" ? handleExit : returnToLobby}
       />
 
       <BattleRoundLogModal
         isOpen={showBattleLog}
         logs={roundLogs}
-        opponentName={opponent?.userName}
+        isSpectator={role === "SPECTATOR"}
+        playerName={
+          role === "SPECTATOR"
+            ? (battleLogPlayerNames.playerName ?? undefined)
+            : undefined
+        }
+        opponentName={
+          role === "SPECTATOR"
+            ? (battleLogPlayerNames.opponentName ?? undefined)
+            : opponent?.userName
+        }
         onClose={() => setShowBattleLog(false)}
       />
     </div>

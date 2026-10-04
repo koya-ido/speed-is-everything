@@ -1,3 +1,7 @@
+import {
+  authorizeBattleResult,
+  battleRoomErrorResponse,
+} from "@/features/battle/server/rooms";
 import { prisma } from "@/lib/prisma";
 import { createClient } from "@/lib/supabase/server";
 import { verifySameOrigin } from "@/utils/security";
@@ -12,6 +16,8 @@ export const POST = async (req: NextRequest) => {
     const body = await req.json();
     const {
       roomId,
+      sessionId,
+      sessionToken,
       result,
       remainingHp,
       rounds,
@@ -32,6 +38,8 @@ export const POST = async (req: NextRequest) => {
       typeof roomId !== "string" ||
       roomId.trim().length === 0 ||
       roomId.length > 50 ||
+      typeof sessionId !== "string" ||
+      typeof sessionToken !== "string" ||
       !["win", "lose", "draw"].includes(result) ||
       typeof remainingHp !== "number" ||
       !Number.isFinite(remainingHp)
@@ -72,9 +80,14 @@ export const POST = async (req: NextRequest) => {
     } = await supabase.auth.getUser();
 
     let unlockedTitles: string[] = [];
+    const { participantUserId } = await authorizeBattleResult(
+      roomId,
+      sessionId,
+      sessionToken,
+    );
 
     // ログイン中のユーザーの場合、バトル戦績と称号を更新
-    if (user) {
+    if (user && participantUserId === user.id) {
       const updateData: {
         battlePlayCount: { increment: number };
         battleWinCount?: { increment: number };
@@ -142,10 +155,6 @@ export const POST = async (req: NextRequest) => {
       },
     });
   } catch (err) {
-    console.error("Battle record error:", err);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 },
-    );
+    return battleRoomErrorResponse(err);
   }
 };

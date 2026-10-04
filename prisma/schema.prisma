@@ -12,6 +12,17 @@ enum DeviceType {
   MOBILE
 }
 
+enum BattleRoomStatus {
+  ACTIVE
+  ENDED
+}
+
+enum BattleParticipantRole {
+  PLAYER_1
+  PLAYER_2
+  SPECTATOR
+}
+
 model User {
   id           String    @id // Supabase Auth の UID
   name         String?   @db.VarChar(15)
@@ -73,4 +84,40 @@ model GamePlay {
 
   @@index([createdAt])
   @@index([userId])
+}
+
+model BattleRoom {
+  id             String            @id @default(cuid())
+  code           String            @unique @db.VarChar(7)
+  ownerSessionId String
+  status         BattleRoomStatus  @default(ACTIVE)
+  createdAt      DateTime          @default(now())
+  endedAt        DateTime?
+  expiresAt      DateTime
+  lastActivityAt DateTime          @default(now())
+  stateRevision  Int               @default(0)
+  stateSnapshot  Json?
+  snapshotWriterSessionId String?
+  snapshotWriterSequence Int      @default(0)
+  participants   BattleParticipant[]
+
+  @@index([status, expiresAt])
+}
+
+model BattleParticipant {
+  sessionId  String                 @id @default(uuid())
+  roomId     String
+  room       BattleRoom             @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId     String?
+  userName   String                 @db.VarChar(15)
+  role       BattleParticipantRole
+  joinOrder  Int
+  isOwner    Boolean                @default(false)
+  isGameHost Boolean                @default(false)
+  tokenHash  String
+  lastSeenAt DateTime               @default(now())
+
+  @@unique([roomId, joinOrder])
+  @@index([roomId, role, joinOrder])
+  @@index([roomId, lastSeenAt])
 }

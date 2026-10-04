@@ -1,9 +1,26 @@
 import { HomeContent } from "@/features/home/components/HomeContent";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockPush = vi.fn();
 let mockRoomParam: string | null = null;
+const battleRoomMocks = vi.hoisted(() => ({
+  createBattleRoom: vi.fn(),
+  getBattleRoomRequest: vi.fn(),
+  rememberBattleAdmission: vi.fn(),
+}));
+
+vi.mock("@/features/battle/utils/roomApi", () => ({
+  createBattleRoom: battleRoomMocks.createBattleRoom,
+  getBattleRoomRequest: battleRoomMocks.getBattleRoomRequest,
+  rememberBattleAdmission: battleRoomMocks.rememberBattleAdmission,
+}));
 
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string) => {
@@ -68,6 +85,7 @@ vi.mock("next-intl", () => ({
       lobby_join_instruction_start:
         "入室後、ホストがゲームを開始するとラウンドがスタートします。",
       lobby_join_submit: "部屋に参加する",
+      room_invalid: "この対戦部屋は終了したか、存在しません",
     };
     return translations[key] || key;
   },
@@ -107,6 +125,20 @@ describe("HomeContent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRoomParam = null;
+    battleRoomMocks.createBattleRoom.mockResolvedValue({
+      room: { code: "123-456" },
+      participant: {
+        isGameHost: true,
+        userName: "TestPlayer",
+        role: "PLAYER_1",
+        isOwner: true,
+      },
+      credentials: { sessionId: "session-1", token: "secret" },
+    });
+    battleRoomMocks.getBattleRoomRequest.mockResolvedValue({
+      room: { code: "956-681", status: "ACTIVE" },
+      participants: [],
+    });
     document.cookie = "home-mode=; path=/; max-age=0";
   });
 
@@ -160,7 +192,7 @@ describe("HomeContent", () => {
     expect(screen.getByText("部屋に参加")).toBeInTheDocument();
   });
 
-  it("opens create room modal when '部屋を作る' is clicked in select dialog", () => {
+  it("creates the room before navigating directly to its name confirmation", async () => {
     render(<HomeContent isLoggedIn={false} defaultUserName="TestPlayer" />);
 
     // Switch to Battle Mode and open dialog
@@ -171,14 +203,24 @@ describe("HomeContent", () => {
     const createRoomCard = screen.getByRole("button", { name: /部屋を作る/i });
     fireEvent.click(createRoomCard);
 
-    // Create room modal opens
-    expect(
-      screen.getByRole("button", { name: /部屋を作成して待機する/i }),
-    ).toBeInTheDocument();
-    expect(screen.getByDisplayValue("TestPlayer")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(battleRoomMocks.createBattleRoom).toHaveBeenCalledWith(
+        "TestPlayer",
+      );
+      expect(battleRoomMocks.rememberBattleAdmission).toHaveBeenCalledWith(
+        expect.objectContaining({
+          roomId: "123-456",
+          userName: "TestPlayer",
+          role: "PLAYER_1",
+        }),
+      );
+      expect(mockPush).toHaveBeenCalledWith(
+        "/battle?room=123-456&confirm=true&hp=1500&host=true",
+      );
+    });
   });
 
-  it("opens join room modal when '部屋に参加' is clicked in select dialog", () => {
+  it("checks the room before navigating when joining from the code modal", async () => {
     render(<HomeContent isLoggedIn={false} />);
 
     // Switch to Battle Mode and open dialog
@@ -192,8 +234,44 @@ describe("HomeContent", () => {
     // Join room modal opens with room code input
     expect(screen.getByPlaceholderText(/例: 389-102/i)).toBeInTheDocument();
     expect(
+      screen.queryByLabelText("プレイヤーネーム (表示名)"),
+    ).not.toBeInTheDocument();
+    expect(
       screen.getByRole("button", { name: /部屋に参加する/i }),
     ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText(/例: 389-102/i), {
+      target: { value: "956-681" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /部屋に参加する/i }));
+
+    await waitFor(() => {
+      expect(battleRoomMocks.getBattleRoomRequest).toHaveBeenCalledWith(
+        "956-681",
+      );
+      expect(mockPush).toHaveBeenCalledWith("/battle?room=956-681");
+    });
+  });
+
+  it("does not navigate to battle when the requested room has ended", async () => {
+    battleRoomMocks.getBattleRoomRequest.mockRejectedValue({
+      code: "ROOM_ENDED",
+      status: 410,
+    });
+    render(<HomeContent isLoggedIn={false} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /バトルモード/i }));
+    fireEvent.click(screen.getByRole("button", { name: /ゲームスタート/i }));
+    fireEvent.click(screen.getByRole("button", { name: /部屋に参加/i }));
+    fireEvent.change(screen.getByPlaceholderText(/例: 389-102/i), {
+      target: { value: "956-681" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /部屋に参加する/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "この対戦部屋は終了したか、存在しません",
+    );
+    expect(mockPush).not.toHaveBeenCalled();
   });
 
   it("auto-opens join modal when room URL parameter is present", () => {
@@ -203,6 +281,9 @@ describe("HomeContent", () => {
 
     // Should automatically be in battle mode and show join modal with initial code
     expect(screen.getByDisplayValue("999-888")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("プレイヤーネーム (表示名)"),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /部屋に参加する/i }),
     ).toBeInTheDocument();

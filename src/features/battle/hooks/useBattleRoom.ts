@@ -3,11 +3,14 @@
 import {
   BattlePhase,
   BattlePlayerState,
+  BattleRoomParticipant,
+  BattleRoomRole,
   BattleRoundLog,
   DeviceWarningAcceptPayload,
   FoulPayload,
   InitialHpOption,
   isReactionEmoji,
+  MAX_ACTIVE_SPECTATOR_REACTIONS,
   PresencePayload,
   REACTION_COOLDOWN_MS,
   REACTION_DISPLAY_MS,
@@ -15,6 +18,8 @@ import {
   RematchPayload,
   RoundResolutionResult,
   RoundStartPayload,
+  SPECTATOR_REACTION_DISPLAY_MS,
+  SpectatorReaction,
   SubmitTimePayload,
 } from "@/features/battle/types";
 import {
@@ -24,10 +29,52 @@ import {
   getBattleReactionRank,
   resolveRound,
 } from "@/features/battle/utils/battleLogic";
+import {
+  BattleRoomView,
+  clearBattleCredentials,
+  dissolveBattleRoomRequest,
+  publishBattleSnapshotRequest,
+  rotateBattleParticipantRequest,
+  sendBattleSessionRequest,
+} from "@/features/battle/utils/roomApi";
 import { getDeviceType, haptics, soundManager } from "@/features/game";
 import { createClient } from "@/lib/supabase/client";
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+const isBattleRoundLog = (value: unknown): value is BattleRoundLog => {
+  if (!value || typeof value !== "object") return false;
+  const log = value as Record<string, unknown>;
+  const isNullableNumber = (field: unknown) =>
+    field === null || (typeof field === "number" && Number.isFinite(field));
+  const isFiniteNumber = (field: unknown) =>
+    typeof field === "number" && Number.isFinite(field);
+  const isFoul = (field: unknown) =>
+    field === null || field === "early_click" || field === "too_fast";
+  const isRank = (field: unknown) =>
+    field === null ||
+    field === "GODLIKE" ||
+    field === "EXCELLENT" ||
+    field === "NORMAL";
+
+  return (
+    Number.isSafeInteger(log.round) &&
+    (log.winner === "player" ||
+      log.winner === "opponent" ||
+      log.winner === "draw") &&
+    isNullableNumber(log.playerTime) &&
+    isRank(log.playerRank) &&
+    isFoul(log.playerFoul) &&
+    isFiniteNumber(log.playerComboBefore) &&
+    isNullableNumber(log.opponentTime) &&
+    isRank(log.opponentRank) &&
+    isFoul(log.opponentFoul) &&
+    isFiniteNumber(log.opponentComboBefore) &&
+    isFiniteNumber(log.damage) &&
+    isFiniteNumber(log.playerHpAfter) &&
+    isFiniteNumber(log.opponentHpAfter)
+  );
+};
 
 type UseBattleRoomProps = {
   roomId: string;
@@ -35,6 +82,10 @@ type UseBattleRoomProps = {
   initialHp?: InitialHpOption;
   userId?: string;
   userName?: string;
+  sessionId?: string;
+  sessionToken?: string;
+  role?: BattleRoomRole;
+  isOwner?: boolean;
 };
 
 export const useBattleRoom = ({
@@ -43,6 +94,10 @@ export const useBattleRoom = ({
   initialHp: requestedHp = 1500,
   userId: initialUserId,
   userName: initialUserName,
+  sessionId: suppliedSessionId,
+  sessionToken,
+  role: initialRole = "PLAYER_1",
+  isOwner: initialIsOwner = false,
 }: UseBattleRoomProps) => {
   const roomId = formatRoomId(rawRoomId);
   const [supabase] = useState(() => createClient());
@@ -72,7 +127,26 @@ export const useBattleRoom = ({
     return `Agent_${localUserId.slice(-4)}`;
   });
 
+  const sessionCredentials = useMemo(
+    () =>
+      suppliedSessionId && sessionToken
+        ? { sessionId: suppliedSessionId, token: sessionToken }
+        : null,
+    [sessionToken, suppliedSessionId],
+  );
+  const localSessionId = suppliedSessionId || localUserId;
   const [isHost, setIsHost] = useState(initialIsHost);
+  const [role, setRole] = useState<BattleRoomRole>(initialRole);
+  const roleRef = useRef<BattleRoomRole>(initialRole);
+  const [isOwner, setIsOwner] = useState(initialIsOwner);
+  const [participants, setParticipants] = useState<BattleRoomParticipant[]>([]);
+  const [roomEnded, setRoomEnded] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [roomReady, setRoomReady] = useState(false);
+  const stateRevisionRef = useRef(0);
+  const snapshotSequenceRef = useRef(0);
+  const refreshRoomRef = useRef<(() => Promise<void>) | null>(null);
+  const lastSnapshotRefreshAtRef = useRef(0);
   const [promotedToHost, setPromotedToHost] = useState(false);
   const [initialHp, setInitialHp] = useState<InitialHpOption>(requestedHp);
   const [phase, setPhase] = useState<BattlePhase>("LOBBY");
@@ -149,6 +223,7 @@ export const useBattleRoom = ({
 
   // 通信チャンネルとタイマーの参照
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const delayTimerRef = useRef<NodeJS.Timeout | null>(null);
   const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
   const resolveTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -156,15 +231,22 @@ export const useBattleRoom = ({
   const hostPromotionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const evaluatedRoundRef = useRef<number | null>(null);
 
-  const recordMatchResult = (
-    finalWinner: "player" | "opponent" | "draw" | null,
-    myHp: number,
-    opponentHp: number,
-  ) => {
-    if (hasSentRecordRef.current) return;
-    hasSentRecordRef.current = true;
+  const recordMatchResult = useCallback(
+    (
+      finalWinner: "player" | "opponent" | "draw" | null,
+      myHp: number,
+      opponentHp: number,
+    ) => {
+      if (hasSentRecordRef.current || stateRef.current.role === "SPECTATOR")
+        return;
+      if (!sessionCredentials) {
+        console.error(
+          "Battle result was not recorded because the session is missing.",
+        );
+        return;
+      }
+      hasSentRecordRef.current = true;
 
-    try {
       const myDevice =
         stateRef.current.player.device === "mobile" ? "MOBILE" : "PC";
       const oppDevice =
@@ -179,11 +261,13 @@ export const useBattleRoom = ({
       );
       const isFoul = currentLogs.some((l) => l.playerFoul !== null);
 
-      fetch("/api/battle/record", {
+      void fetch("/api/battle/record", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           roomId: stateRef.current.roomId,
+          sessionId: sessionCredentials.sessionId,
+          sessionToken: sessionCredentials.token,
           result:
             finalWinner === "player"
               ? "win"
@@ -203,9 +287,26 @@ export const useBattleRoom = ({
           reactionTimes,
           isFoul,
         }),
-      }).catch(() => {});
-    } catch {}
-  };
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            const data: unknown = await response.json().catch(() => null);
+            throw new Error(
+              data &&
+                typeof data === "object" &&
+                "error" in data &&
+                typeof data.error === "string"
+                ? data.error
+                : `Battle result recording failed (${response.status}).`,
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          console.error("Unable to record the battle result:", error);
+        });
+    },
+    [sessionCredentials],
+  );
 
   // 最新状態の参照用
   const stateRef = useRef({
@@ -215,6 +316,7 @@ export const useBattleRoom = ({
     currentRound,
     initialHp,
     isHost,
+    role,
     roomId,
   });
 
@@ -226,9 +328,235 @@ export const useBattleRoom = ({
       currentRound,
       initialHp,
       isHost,
+      role,
       roomId,
     };
-  }, [phase, player, opponent, currentRound, initialHp, isHost, roomId]);
+  }, [phase, player, opponent, currentRound, initialHp, isHost, role, roomId]);
+
+  const applyBattleRoomView = useCallback(
+    (view: BattleRoomView) => {
+      const self = view.participants.find(
+        (participant) => participant.sessionId === localSessionId,
+      );
+      const becameGameHost = Boolean(
+        self?.isGameHost && !stateRef.current.isHost,
+      );
+      setParticipants(view.participants);
+      if (self) {
+        const wasSpectating = roleRef.current === "SPECTATOR";
+        roleRef.current = self.role;
+        setRole(self.role);
+        setIsOwner(self.isOwner);
+        setIsHost(self.isGameHost);
+        if (wasSpectating && self.role !== "SPECTATOR") {
+          setPhase("LOBBY");
+          setCountdown(null);
+          setCurrentRound(1);
+          setRoundResult(null);
+          setMatchWinner(null);
+          setMatchFinishReason(null);
+          setRoundLogs([]);
+          setRematchRequestedByMe(false);
+          rematchRequestedByMeRef.current = false;
+          setRematchRequestedByOpponent(false);
+        }
+        if (self.role !== "SPECTATOR") {
+          setPlayer((previous) => {
+            if (
+              previous.userName === self.userName &&
+              previous.isHost === self.isGameHost
+            ) {
+              return previous;
+            }
+            return {
+              ...previous,
+              userName: self.userName,
+              isHost: self.isGameHost,
+            };
+          });
+        }
+      }
+
+      const otherPlayer = view.participants.find(
+        (participant) =>
+          participant.sessionId !== localSessionId &&
+          participant.role !== "SPECTATOR" &&
+          (self?.role === "SPECTATOR" || participant.role !== self?.role),
+      );
+      if (otherPlayer && self?.role !== "SPECTATOR") {
+        setOpponent((previous) => {
+          if (
+            previous?.userId === otherPlayer.sessionId &&
+            previous.userName === otherPlayer.userName &&
+            previous.isHost === otherPlayer.isGameHost
+          ) {
+            return previous;
+          }
+          return {
+            userId: otherPlayer.sessionId,
+            userName: otherPlayer.userName,
+            device: previous?.device ?? detectedDevice,
+            hp: previous?.hp ?? stateRef.current.initialHp,
+            combo: previous?.combo ?? 0,
+            godlikeCombo: previous?.godlikeCombo ?? 0,
+            comboRank: previous?.comboRank ?? null,
+            currentRoundTime: previous?.currentRoundTime ?? null,
+            currentRoundRank: previous?.currentRoundRank ?? null,
+            currentRoundFoul: previous?.currentRoundFoul ?? null,
+            isReady: otherPlayer.role !== "SPECTATOR",
+            isHost: otherPlayer.isGameHost,
+          };
+        });
+      } else if (!otherPlayer && self?.role !== "SPECTATOR") {
+        setOpponent(null);
+      }
+
+      if (
+        self &&
+        (self.role === "SPECTATOR" || becameGameHost) &&
+        view.room.stateRevision > stateRevisionRef.current
+      ) {
+        const snapshot = view.room.stateSnapshot;
+        if (
+          snapshot &&
+          typeof snapshot === "object" &&
+          !Array.isArray(snapshot) &&
+          "player" in snapshot &&
+          "opponent" in snapshot &&
+          "phase" in snapshot &&
+          "currentRound" in snapshot &&
+          typeof snapshot.phase === "string" &&
+          [
+            "LOBBY",
+            "DEVICE_WARNING",
+            "COUNTDOWN",
+            "WAITING",
+            "ACTION",
+            "RESOLVING",
+            "MATCH_FINISHED",
+          ].includes(snapshot.phase) &&
+          typeof snapshot.currentRound === "number" &&
+          (!("countdown" in snapshot) ||
+            snapshot.countdown === null ||
+            (typeof snapshot.countdown === "number" &&
+              snapshot.countdown >= 1 &&
+              snapshot.countdown <= 3)) &&
+          typeof Reflect.get(snapshot, "initialHp") === "number" &&
+          typeof snapshot.player === "object" &&
+          snapshot.player !== null &&
+          "userId" in snapshot.player &&
+          typeof snapshot.player.userId === "string"
+        ) {
+          const shared = snapshot as {
+            phase: BattlePhase;
+            countdown?: number | null;
+            currentRound: number;
+            initialHp: number;
+            player: BattlePlayerState;
+            opponent: BattlePlayerState | null;
+            roundResult: RoundResolutionResult | null;
+            roundLogs?: unknown;
+            matchWinner: "player" | "opponent" | "draw" | null;
+            matchFinishReason:
+              "hp_zero" | "foul" | "opponent_left" | "both_hp_zero" | null;
+          };
+          const shouldReversePerspective =
+            becameGameHost && shared.player.userId !== localSessionId;
+          const restoredPlayer = shouldReversePerspective
+            ? shared.opponent
+            : shared.player;
+          const restoredOpponent = shouldReversePerspective
+            ? shared.player
+            : shared.opponent;
+          const reverseWinner = (
+            winner: "player" | "opponent" | "draw" | null,
+          ) =>
+            shouldReversePerspective
+              ? winner === "player"
+                ? "opponent"
+                : winner === "opponent"
+                  ? "player"
+                  : winner
+              : winner;
+          const restoredRoundResult = shared.roundResult
+            ? shouldReversePerspective
+              ? {
+                  ...shared.roundResult,
+                  winner: reverseWinner(shared.roundResult.winner),
+                  matchWinner: reverseWinner(shared.roundResult.matchWinner),
+                  playerDamageTaken: shared.roundResult.opponentDamageTaken,
+                  opponentDamageTaken: shared.roundResult.playerDamageTaken,
+                  playerHpBefore: shared.roundResult.opponentHpBefore,
+                  opponentHpBefore: shared.roundResult.playerHpBefore,
+                  playerNewHp: shared.roundResult.opponentNewHp,
+                  opponentNewHp: shared.roundResult.playerNewHp,
+                  playerNewCombo: shared.roundResult.opponentNewCombo,
+                  opponentNewCombo: shared.roundResult.playerNewCombo,
+                  playerNewGodlikeCombo:
+                    shared.roundResult.opponentNewGodlikeCombo,
+                  opponentNewGodlikeCombo:
+                    shared.roundResult.playerNewGodlikeCombo,
+                  playerNewComboRank:
+                    shared.roundResult.opponentNewComboRank,
+                  opponentNewComboRank:
+                    shared.roundResult.playerNewComboRank,
+                  playerMultiplier: shared.roundResult.opponentMultiplier,
+                  opponentMultiplier: shared.roundResult.playerMultiplier,
+                  playerComboBefore:
+                    shared.roundResult.opponentComboBefore,
+                  opponentComboBefore:
+                    shared.roundResult.playerComboBefore,
+                  playerGodlikeComboBefore:
+                    shared.roundResult.opponentGodlikeComboBefore,
+                  opponentGodlikeComboBefore:
+                    shared.roundResult.playerGodlikeComboBefore,
+                }
+              : shared.roundResult
+            : null;
+          const restoredRoundLogs = Array.isArray(shared.roundLogs)
+            ? shared.roundLogs.map((log) => {
+                if (!shouldReversePerspective || !isBattleRoundLog(log)) {
+                  return log;
+                }
+                return {
+                  ...log,
+                  winner: reverseWinner(log.winner) ?? "draw",
+                  playerTime: log.opponentTime,
+                  playerRank: log.opponentRank,
+                  playerFoul: log.opponentFoul,
+                  playerComboBefore: log.opponentComboBefore,
+                  playerGodlikeComboBefore: log.opponentGodlikeComboBefore,
+                  opponentTime: log.playerTime,
+                  opponentRank: log.playerRank,
+                  opponentFoul: log.playerFoul,
+                  opponentComboBefore: log.playerComboBefore,
+                  opponentGodlikeComboBefore: log.playerGodlikeComboBefore,
+                  playerHpAfter: log.opponentHpAfter,
+                  opponentHpAfter: log.playerHpAfter,
+                };
+              })
+            : [];
+          stateRevisionRef.current = view.room.stateRevision;
+          setPhase(shared.phase);
+          setCountdown(shared.countdown ?? null);
+          setCurrentRound(shared.currentRound);
+          setInitialHp(shared.initialHp);
+          if (restoredPlayer) setPlayer(restoredPlayer);
+          setOpponent(restoredOpponent);
+          setRoundResult(restoredRoundResult);
+          if (
+            Array.isArray(shared.roundLogs) &&
+            shared.roundLogs.every(isBattleRoundLog)
+          ) {
+            setRoundLogs(restoredRoundLogs);
+          }
+          setMatchWinner(reverseWinner(shared.matchWinner));
+          setMatchFinishReason(shared.matchFinishReason);
+        }
+      }
+    },
+    [detectedDevice, localSessionId],
+  );
 
   useEffect(() => {
     roundLogsRef.current = roundLogs;
@@ -257,8 +585,160 @@ export const useBattleRoom = ({
     }
   }, []);
 
+  useEffect(() => {
+    if (!sessionCredentials || roomEnded || sessionExpired) return;
+    let cancelled = false;
+    let loggedError = false;
+    const refresh = async () => {
+      try {
+        const response = await sendBattleSessionRequest(
+          roomId,
+          sessionCredentials,
+          "PATCH",
+        );
+        const result: unknown = await response.json();
+        if (!response.ok) {
+          if (response.status === 401) {
+            if (cancelled) return;
+            setSessionExpired(true);
+            clearBattleCredentials(roomId);
+            clearAllTimers();
+            if (heartbeatTimerRef.current) {
+              clearInterval(heartbeatTimerRef.current);
+              heartbeatTimerRef.current = null;
+            }
+            refreshRoomRef.current = null;
+            channelRef.current?.unsubscribe();
+            channelRef.current = null;
+            return;
+          }
+          if (
+            response.status === 410 ||
+            (result &&
+              typeof result === "object" &&
+              "code" in result &&
+              result.code === "ROOM_ENDED")
+          ) {
+            setRoomEnded(true);
+            clearBattleCredentials(roomId);
+            clearAllTimers();
+            channelRef.current?.unsubscribe();
+            channelRef.current = null;
+            return;
+          }
+          throw new Error(
+            result &&
+              typeof result === "object" &&
+              "error" in result &&
+              typeof result.error === "string"
+              ? result.error
+              : `Room heartbeat failed (${response.status}).`,
+          );
+        }
+        loggedError = false;
+        if (!cancelled) {
+          applyBattleRoomView(result as BattleRoomView);
+          setRoomReady(true);
+        }
+      } catch (error) {
+        if (!loggedError) {
+          console.error("Battle room heartbeat failed:", error);
+          loggedError = true;
+        }
+      }
+    };
+    refreshRoomRef.current = refresh;
+    heartbeatTimerRef.current = setInterval(() => void refresh(), 5000);
+    void refresh();
+    return () => {
+      cancelled = true;
+      refreshRoomRef.current = null;
+      if (heartbeatTimerRef.current) {
+        clearInterval(heartbeatTimerRef.current);
+        heartbeatTimerRef.current = null;
+      }
+    };
+  }, [
+    applyBattleRoomView,
+    clearAllTimers,
+    roomEnded,
+    roomId,
+    sessionCredentials,
+    sessionExpired,
+  ]);
+
+  useEffect(() => {
+    if (
+      !sessionCredentials ||
+      !roomReady ||
+      !isHost ||
+      role === "SPECTATOR" ||
+      roomEnded
+    ) {
+      return;
+    }
+    let cancelled = false;
+    snapshotSequenceRef.current += 1;
+    const snapshot = {
+      version: 1,
+      publisherSessionId: localSessionId,
+      clientSequence: snapshotSequenceRef.current,
+      phase,
+      countdown,
+      currentRound,
+      initialHp,
+      player,
+      opponent,
+      roundResult,
+      roundLogs,
+      matchWinner,
+      matchFinishReason,
+    };
+    void publishBattleSnapshotRequest(
+      roomId,
+      sessionCredentials,
+      snapshot,
+    ).then(
+      (published) => {
+        if (!cancelled) {
+          stateRevisionRef.current = published.stateRevision;
+          channelRef.current?.send({
+            type: "broadcast",
+            event: "snapshot_updated",
+            payload: { revision: published.stateRevision },
+          });
+        }
+      },
+      (error: unknown) => {
+        console.error("Unable to publish the battle snapshot:", error);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    countdown,
+    currentRound,
+    initialHp,
+    isHost,
+    localSessionId,
+    matchFinishReason,
+    matchWinner,
+    opponent,
+    phase,
+    player,
+    roomEnded,
+    roomId,
+    roomReady,
+    role,
+    roundResult,
+    roundLogs,
+    sessionCredentials,
+  ]);
+
   // ホストへの昇格処理（ロビーでホスト退出時）
   const promoteSelfToHost = useCallback(() => {
+    if (sessionCredentials) return;
     if (stateRef.current.isHost) return;
     setIsHost(true);
     setPromotedToHost(true);
@@ -276,21 +756,67 @@ export const useBattleRoom = ({
       };
       channelRef.current.track(payload);
     }
-  }, [detectedDevice, localUserId, localUserName]);
+  }, [detectedDevice, localUserId, localUserName, sessionCredentials]);
 
   // 部屋退出処理（ブロードキャスト通知付き）
   const leaveRoom = useCallback(() => {
+    if (sessionCredentials) {
+      void sendBattleSessionRequest(roomId, sessionCredentials, "DELETE")
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`Leaving the room failed (${response.status}).`);
+          }
+          clearBattleCredentials(roomId);
+        })
+        .catch((error: unknown) => {
+          console.error("Unable to leave the battle room:", error);
+        });
+    }
     if (channelRef.current) {
       channelRef.current.send({
         type: "broadcast",
         event: "player_left",
-        payload: { userId: localUserId, isHost: stateRef.current.isHost },
+        payload: {
+          userId: localUserId,
+          sessionId: localSessionId,
+          isHost: stateRef.current.isHost,
+        },
       });
       channelRef.current.unsubscribe();
       channelRef.current = null;
     }
     clearAllTimers();
-  }, [clearAllTimers, localUserId]);
+  }, [clearAllTimers, localSessionId, localUserId, roomId, sessionCredentials]);
+
+  const dissolveRoom = useCallback(async () => {
+    if (!sessionCredentials || !isHost) {
+      throw new Error("Only the game host can dissolve this room.");
+    }
+    const response = await dissolveBattleRoomRequest(
+      roomId,
+      sessionCredentials,
+    );
+    if (!response.ok) {
+      const data: unknown = await response.json().catch(() => null);
+      throw new Error(
+        data &&
+          typeof data === "object" &&
+          "error" in data &&
+          typeof data.error === "string"
+          ? data.error
+          : `Dissolving the room failed (${response.status}).`,
+      );
+    }
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "room_dissolved",
+      payload: { sessionId: localSessionId },
+    });
+    clearAllTimers();
+    setRoomEnded(true);
+    channelRef.current?.unsubscribe();
+    channelRef.current = null;
+  }, [clearAllTimers, isHost, localSessionId, roomId, sessionCredentials]);
 
   // 1. ラウンド開始実行 (ホストから呼び出し、またはround_start受信時)
   const startRoundWithDelay = useCallback(
@@ -671,7 +1197,7 @@ export const useBattleRoom = ({
         }
       }, resolveDelay);
     },
-    [triggerNextRound],
+    [recordMatchResult, triggerNextRound],
   );
 
   // 2. タップ/クリック判定
@@ -686,6 +1212,7 @@ export const useBattleRoom = ({
         rank: "GODLIKE" | "EXCELLENT" | "NORMAL";
       }
     | null => {
+    if (stateRef.current.role === "SPECTATOR") return null;
     const currentPhase = stateRef.current.phase;
     const now = performance.now();
 
@@ -832,6 +1359,7 @@ export const useBattleRoom = ({
 
   // 3. デバイス警告の承諾
   const acceptDeviceWarning = useCallback(() => {
+    if (stateRef.current.role === "SPECTATOR") return;
     setDeviceWarningAcceptedByMe(true);
     if (channelRef.current) {
       const payload: DeviceWarningAcceptPayload = { userId: localUserId };
@@ -845,7 +1373,8 @@ export const useBattleRoom = ({
 
   // 4. マッチ開始（ホストが実行）
   const startMatch = useCallback(() => {
-    if (!stateRef.current.isHost) return;
+    if (!stateRef.current.isHost || stateRef.current.role === "SPECTATOR")
+      return;
     soundManager.unlock();
     soundManager.playBgm();
     if (
@@ -939,6 +1468,7 @@ export const useBattleRoom = ({
 
   // 5. 再戦要求
   const requestRematch = useCallback(() => {
+    if (stateRef.current.role === "SPECTATOR") return;
     setRematchRequestedByMe(true);
     rematchRequestedByMeRef.current = true;
 
@@ -976,6 +1506,9 @@ export const useBattleRoom = ({
 
   // 初期HP変更処理 (ホストのみ操作可能、リアルタイム反映)
   const changeInitialHp = useCallback((newHp: InitialHpOption) => {
+    if (!stateRef.current.isHost || stateRef.current.role === "SPECTATOR") {
+      return;
+    }
     const now = Date.now();
     hpTimestampRef.current = now;
     setInitialHp(newHp);
@@ -997,39 +1530,107 @@ export const useBattleRoom = ({
   const [myReaction, setMyReaction] = useState<ReactionEmoji | null>(null);
   const [opponentReaction, setOpponentReaction] =
     useState<ReactionEmoji | null>(null);
+  const [spectatorReaction, setSpectatorReaction] = useState<
+    SpectatorReaction[]
+  >([]);
   const myReactionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const opponentReactionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const spectatorReactionTimersRef = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
   const lastSentReactionRef = useRef(0);
-  const lastReceivedReactionRef = useRef(0);
+  const lastReceivedReactionBySenderRef = useRef(new Map<string, number>());
+  const reactionSequenceRef = useRef(0);
+  const spectatorReactionQueueRef = useRef<SpectatorReaction[]>([]);
+
+  const addSpectatorReaction = useCallback((reaction: SpectatorReaction) => {
+    const nextQueue = [...spectatorReactionQueueRef.current, reaction].slice(
+      -MAX_ACTIVE_SPECTATOR_REACTIONS,
+    );
+    const activeIds = new Set(nextQueue.map(({ id }) => id));
+    for (const [reactionId, timer] of spectatorReactionTimersRef.current) {
+      if (!activeIds.has(reactionId)) {
+        clearTimeout(timer);
+        spectatorReactionTimersRef.current.delete(reactionId);
+      }
+    }
+    spectatorReactionQueueRef.current = nextQueue;
+    setSpectatorReaction(nextQueue);
+
+    if (spectatorReactionTimersRef.current.has(reaction.id)) {
+      clearTimeout(spectatorReactionTimersRef.current.get(reaction.id));
+    }
+    const timer = setTimeout(
+      () => {
+        spectatorReactionTimersRef.current.delete(reaction.id);
+        const remaining = spectatorReactionQueueRef.current.filter(
+          ({ id }) => id !== reaction.id,
+        );
+        spectatorReactionQueueRef.current = remaining;
+        setSpectatorReaction(remaining);
+      },
+      Math.max(
+        0,
+        reaction.receivedAt + SPECTATOR_REACTION_DISPLAY_MS - Date.now(),
+      ),
+    );
+    spectatorReactionTimersRef.current.set(reaction.id, timer);
+  }, []);
 
   useEffect(
     () => () => {
       if (myReactionTimerRef.current) clearTimeout(myReactionTimerRef.current);
       if (opponentReactionTimerRef.current)
         clearTimeout(opponentReactionTimerRef.current);
+      for (const timer of spectatorReactionTimersRef.current.values()) {
+        clearTimeout(timer);
+      }
+      spectatorReactionTimersRef.current.clear();
     },
     [],
   );
 
-  const sendReaction = useCallback((emoji: ReactionEmoji) => {
-    if (!isReactionEmoji(emoji)) return;
-    const now = Date.now();
-    if (now - lastSentReactionRef.current < REACTION_COOLDOWN_MS) return;
-    lastSentReactionRef.current = now;
+  const sendReaction = useCallback(
+    (emoji: ReactionEmoji) => {
+      if (!isReactionEmoji(emoji)) return;
+      const now = Date.now();
+      if (now - lastSentReactionRef.current < REACTION_COOLDOWN_MS) return;
+      lastSentReactionRef.current = now;
 
-    setMyReaction(emoji);
-    if (myReactionTimerRef.current) clearTimeout(myReactionTimerRef.current);
-    myReactionTimerRef.current = setTimeout(
-      () => setMyReaction(null),
-      REACTION_DISPLAY_MS,
-    );
+      const senderRole = roleRef.current;
+      const reactionId = `${localSessionId}:${now}:${++reactionSequenceRef.current}`;
+      if (senderRole === "SPECTATOR") {
+        addSpectatorReaction({
+          id: reactionId,
+          senderId: localSessionId,
+          emoji,
+          userName: localUserName,
+          receivedAt: now,
+          horizontalPosition: 10 + Math.random() * 80,
+        });
+      } else {
+        setMyReaction(emoji);
+        if (myReactionTimerRef.current)
+          clearTimeout(myReactionTimerRef.current);
+        myReactionTimerRef.current = setTimeout(
+          () => setMyReaction(null),
+          REACTION_DISPLAY_MS,
+        );
+      }
 
-    channelRef.current?.send({
-      type: "broadcast",
-      event: "reaction",
-      payload: { emoji },
-    });
-  }, []);
+      channelRef.current?.send({
+        type: "broadcast",
+        event: "reaction",
+        payload: {
+          emoji,
+          role: senderRole,
+          senderId: localSessionId,
+          userName: localUserName,
+        },
+      });
+    },
+    [addSpectatorReaction, localSessionId, localUserName],
+  );
 
   // 6. ロビーへ戻る（自身をロビー画面へ戻す）
   const resetToLobbyState = useCallback(() => {
@@ -1091,11 +1692,18 @@ export const useBattleRoom = ({
         list.forEach((item) => allPresences.push(item));
       });
       const otherPresences = allPresences.filter(
-        (p) => p.userId !== localUserId,
+        (p) =>
+          (p.sessionId
+            ? p.sessionId !== localSessionId
+            : p.userId !== localUserId) &&
+          (!sessionCredentials ||
+            (p.role !== undefined &&
+              p.role !== "SPECTATOR" &&
+              p.role !== role)),
       );
       if (otherPresences.length === 0) {
         setOpponent(null);
-        if (!stateRef.current.isHost) {
+        if (!stateRef.current.isHost && !sessionCredentials) {
           promoteSelfToHost();
         }
       } else {
@@ -1116,9 +1724,27 @@ export const useBattleRoom = ({
         }));
       }
     }
-  }, [clearAllTimers, localUserId, promoteSelfToHost]);
+  }, [
+    clearAllTimers,
+    localSessionId,
+    localUserId,
+    promoteSelfToHost,
+    role,
+    sessionCredentials,
+  ]);
+
+  const rotateToSpectator = useCallback(async () => {
+    if (!sessionCredentials || stateRef.current.role === "SPECTATOR") return;
+    const view = await rotateBattleParticipantRequest(
+      roomId,
+      sessionCredentials,
+    );
+    applyBattleRoomView(view);
+    resetToLobbyState();
+  }, [applyBattleRoomView, resetToLobbyState, roomId, sessionCredentials]);
 
   const returnToLobby = useCallback(() => {
+    if (stateRef.current.role === "SPECTATOR") return;
     resetToLobbyState();
     if (channelRef.current) {
       channelRef.current.send({
@@ -1135,7 +1761,7 @@ export const useBattleRoom = ({
 
     const channel = supabase.channel(`battle:${roomId}`, {
       config: {
-        presence: { key: localUserId },
+        presence: { key: localSessionId },
         broadcast: { ack: false, self: false },
       },
     });
@@ -1153,7 +1779,14 @@ export const useBattleRoom = ({
 
       // 自身以外のプレイヤーを探す (複数ある場合は最新のものを取得)
       const otherPresences = allPresences.filter(
-        (p) => p.userId !== localUserId,
+        (p) =>
+          (p.sessionId
+            ? p.sessionId !== localSessionId
+            : p.userId !== localUserId) &&
+          (!sessionCredentials ||
+            (p.role !== undefined &&
+              p.role !== "SPECTATOR" &&
+              p.role !== role)),
       );
       const other =
         otherPresences.length > 0
@@ -1202,6 +1835,7 @@ export const useBattleRoom = ({
           isHost: other.isHost,
         }));
       } else {
+        if (role === "SPECTATOR") return;
         // 相手が一時的に見当たらない場合
         setOpponent(null);
 
@@ -1276,6 +1910,20 @@ export const useBattleRoom = ({
         opponentHp: number;
       };
       clearAllTimers();
+
+      if (stateRef.current.role === "SPECTATOR") {
+        setPlayer((prev) => ({ ...prev, hp: data.playerHp }));
+        setOpponent((prev) => (prev ? { ...prev, hp: data.opponentHp } : prev));
+        stateRef.current.player.hp = data.playerHp;
+        if (stateRef.current.opponent) {
+          stateRef.current.opponent.hp = data.opponentHp;
+        }
+
+        setPhase("MATCH_FINISHED");
+        setMatchWinner(data.winner);
+        setMatchFinishReason(data.reason);
+        return;
+      }
 
       // ホスト視点の勝者をゲスト視点に反転
       const guestWinner =
@@ -1365,7 +2013,11 @@ export const useBattleRoom = ({
 
       // Resolve timers may be throttled while a mobile browser is backgrounded.
       // The host's next-round snapshot is authoritative for HP and combo state.
-      if (data.hostState && data.guestState) {
+      if (
+        data.hostState &&
+        data.guestState &&
+        stateRef.current.role !== "SPECTATOR"
+      ) {
         const localState = stateRef.current.isHost
           ? data.hostState
           : data.guestState;
@@ -1389,6 +2041,7 @@ export const useBattleRoom = ({
 
       // round > 1 でどちらかのHPがすでに0なら次ラウンドへ進まず決着状態を維持
       if (
+        stateRef.current.role !== "SPECTATOR" &&
         data.round > 1 &&
         (stateRef.current.player.hp <= 0 ||
           (stateRef.current.opponent?.hp ?? 1000) <= 0)
@@ -1432,12 +2085,69 @@ export const useBattleRoom = ({
 
     // Broadcast: reaction (相手のリアクションスタンプ)
     channel.on("broadcast", { event: "reaction" }, ({ payload }) => {
-      const emoji = (payload as { emoji?: unknown } | null)?.emoji;
+      const reactionPayload = payload as {
+        emoji?: unknown;
+        role?: unknown;
+        senderId?: unknown;
+        userName?: unknown;
+      } | null;
+      const emoji = reactionPayload?.emoji;
       if (!isReactionEmoji(emoji)) return;
+      const senderRole = reactionPayload?.role;
+      if (
+        senderRole !== undefined &&
+        senderRole !== "SPECTATOR" &&
+        senderRole !== "PLAYER_1" &&
+        senderRole !== "PLAYER_2"
+      ) {
+        return;
+      }
       // 受信側でも連打を制限 (改変クライアント対策)
       const now = Date.now();
-      if (now - lastReceivedReactionRef.current < REACTION_COOLDOWN_MS) return;
-      lastReceivedReactionRef.current = now;
+      for (const [
+        senderId,
+        lastReceivedAt,
+      ] of lastReceivedReactionBySenderRef.current) {
+        if (now - lastReceivedAt >= REACTION_COOLDOWN_MS) {
+          lastReceivedReactionBySenderRef.current.delete(senderId);
+        }
+      }
+      if (senderRole === "SPECTATOR") {
+        const senderId = reactionPayload?.senderId;
+        const userName = reactionPayload?.userName;
+        if (
+          typeof senderId !== "string" ||
+          senderId.length === 0 ||
+          typeof userName !== "string" ||
+          userName.trim().length === 0
+        ) {
+          return;
+        }
+        if (senderId === localSessionId) return;
+        const lastReceivedAt =
+          lastReceivedReactionBySenderRef.current.get(senderId) ?? 0;
+        if (now - lastReceivedAt < REACTION_COOLDOWN_MS) return;
+        lastReceivedReactionBySenderRef.current.set(senderId, now);
+
+        addSpectatorReaction({
+          id: `${senderId}:${now}:${++reactionSequenceRef.current}`,
+          senderId,
+          emoji,
+          userName,
+          receivedAt: now,
+          horizontalPosition: 10 + Math.random() * 80,
+        });
+        return;
+      }
+
+      const senderId =
+        typeof reactionPayload?.senderId === "string"
+          ? reactionPayload.senderId
+          : "legacy-player";
+      const lastReceivedAt =
+        lastReceivedReactionBySenderRef.current.get(senderId) ?? 0;
+      if (now - lastReceivedAt < REACTION_COOLDOWN_MS) return;
+      lastReceivedReactionBySenderRef.current.set(senderId, now);
 
       setOpponentReaction(emoji);
       if (opponentReactionTimerRef.current)
@@ -1450,6 +2160,7 @@ export const useBattleRoom = ({
 
     // Broadcast: submit_time
     channel.on("broadcast", { event: "submit_time" }, ({ payload }) => {
+      if (stateRef.current.role === "SPECTATOR") return;
       const data = payload as SubmitTimePayload;
       if (data.round !== stateRef.current.currentRound) {
         return;
@@ -1472,6 +2183,7 @@ export const useBattleRoom = ({
 
     // Broadcast: foul
     channel.on("broadcast", { event: "foul" }, ({ payload }) => {
+      if (stateRef.current.role === "SPECTATOR") return;
       const data = payload as FoulPayload;
       if (data.round !== stateRef.current.currentRound) {
         return;
@@ -1547,16 +2259,29 @@ export const useBattleRoom = ({
       }
     });
 
+    channel.on("broadcast", { event: "snapshot_updated" }, () => {
+      const now = Date.now();
+      if (now - lastSnapshotRefreshAtRef.current < 250) return;
+      lastSnapshotRefreshAtRef.current = now;
+      void refreshRoomRef.current?.();
+    });
+
+    channel.on("broadcast", { event: "room_dissolved" }, () => {
+      void refreshRoomRef.current?.();
+    });
+
     // チャンネル購読
     channel.subscribe((status) => {
       if (status === "SUBSCRIBED") {
         const payload: PresencePayload = {
           userId: localUserId,
+          sessionId: localSessionId,
           userName: localUserName,
           device: detectedDevice,
-          isReady: true,
+          isReady: role !== "SPECTATOR",
           initialHp: stateRef.current.initialHp,
           isHost: stateRef.current.isHost,
+          role,
           hpTimestamp: hpTimestampRef.current || Date.now(),
         };
         channel.track(payload);
@@ -1583,17 +2308,22 @@ export const useBattleRoom = ({
     };
   }, [
     roomId,
+    localSessionId,
     localUserId,
     localUserName,
     detectedDevice,
     initialIsHost,
+    role,
+    sessionCredentials,
     clearAllTimers,
     startRoundWithDelay,
     evaluateRoundIfReady,
     resetForRematch,
     resetToLobbyState,
     promoteSelfToHost,
+    recordMatchResult,
     supabase,
+    addSpectatorReaction,
   ]);
 
   // 両者がデバイス警告を承諾したときの自動遷移
@@ -1618,6 +2348,27 @@ export const useBattleRoom = ({
   return {
     roomId,
     isHost,
+    isOwner,
+    role,
+    participants,
+    spectatorCount: participants.filter(
+      (participant) =>
+        participant.role === "SPECTATOR" && participant.connected,
+    ).length,
+    queuePosition:
+      role === "SPECTATOR"
+        ? participants
+            .filter(
+              (participant) =>
+                participant.role === "SPECTATOR" && participant.connected,
+            )
+            .sort((left, right) => left.joinOrder - right.joinOrder)
+            .findIndex(
+              (participant) => participant.sessionId === localSessionId,
+            ) + 1
+        : 0,
+    roomEnded,
+    sessionExpired,
     promotedToHost,
     phase,
     setPhase,
@@ -1625,6 +2376,7 @@ export const useBattleRoom = ({
     changeInitialHp,
     myReaction,
     opponentReaction,
+    spectatorReaction,
     sendReaction,
     currentRound,
     countdown,
@@ -1645,6 +2397,8 @@ export const useBattleRoom = ({
     requestRematch,
     returnToLobby,
     leaveRoom,
+    dissolveRoom,
+    rotateToSpectator,
     roundLogs,
   };
 };

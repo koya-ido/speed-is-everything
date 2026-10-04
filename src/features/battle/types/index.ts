@@ -4,6 +4,34 @@ export type { DeviceType, ReactionRank };
 
 export type InitialHpOption = number;
 
+export type BattleRoomRole = "PLAYER_1" | "PLAYER_2" | "SPECTATOR";
+
+export type BattleRoomParticipant = {
+  sessionId: string;
+  userName: string;
+  role: BattleRoomRole;
+  joinOrder: number;
+  isOwner: boolean;
+  isGameHost: boolean;
+  connected: boolean;
+};
+
+export type BattleRoomSnapshot = {
+  code: string;
+  status: "ACTIVE" | "ENDED";
+  createdAt: string;
+  expiresAt: string;
+  stateRevision: number;
+  stateSnapshot: unknown;
+};
+
+export type BattleRoomAdmission = {
+  room: BattleRoomSnapshot;
+  participants: BattleRoomParticipant[];
+  participant: BattleRoomParticipant;
+  credentials: { sessionId: string; token: string };
+};
+
 export const INITIAL_HP_MIN = 500;
 export const INITIAL_HP_MAX = 3000;
 export const INITIAL_HP_STEP = 500;
@@ -23,10 +51,21 @@ export const normalizeInitialHp = (value: unknown): InitialHpOption => {
 export const getInitialHpTier = (hp: number): "QUICK" | "STANDARD" | "PRO" =>
   hp <= 1000 ? "QUICK" : hp <= 2000 ? "STANDARD" : "PRO";
 
-export const REACTION_EMOJIS = ["👍", "🥹", "😎", "⬆️", "⬇️"] as const;
+export const REACTION_EMOJIS = ["👍", "🥹", "😎", "⬆️", "⬇️", "👀"] as const;
 export type ReactionEmoji = (typeof REACTION_EMOJIS)[number];
+export type SpectatorReaction = {
+  id: string;
+  senderId: string;
+  emoji: ReactionEmoji;
+  userName: string;
+  receivedAt: number;
+  horizontalPosition: number;
+};
+export const MAX_ACTIVE_SPECTATOR_REACTIONS = 12;
 /** リアクションの表示時間 (ms) */
 export const REACTION_DISPLAY_MS = 2000;
+/** 試合中に流れる観戦者スタンプの表示時間 (ms) */
+export const SPECTATOR_REACTION_DISPLAY_MS = 4000;
 /** 連打対策: 同一プレイヤーが送信できる最小間隔 (ms) */
 export const REACTION_COOLDOWN_MS = 1000;
 
@@ -35,11 +74,13 @@ export const isReactionEmoji = (v: unknown): v is ReactionEmoji =>
 
 export type PresencePayload = {
   userId: string;
+  sessionId?: string;
   userName: string;
   device: "desktop" | "mobile";
   isReady: boolean;
   initialHp: number; // ホストのみ指定 (500〜3000, 500刻み)
   isHost?: boolean;
+  role?: BattleRoomRole;
   hpTimestamp?: number;
 };
 

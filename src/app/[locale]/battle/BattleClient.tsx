@@ -6,6 +6,10 @@ import {
   InitialHpOption,
   normalizeInitialHp,
 } from "@/features/battle";
+import {
+  clearBattleAdmission,
+  getBattleAdmission,
+} from "@/features/battle/utils/roomApi";
 import { useRouter } from "@/i18n/routing";
 import { useSearchParams } from "next/navigation";
 import { useState, useSyncExternalStore } from "react";
@@ -17,6 +21,17 @@ const getServerMountSnapshot = () => false;
 type BattleClientProps = {
   initialUserName?: string;
   initialUserId?: string;
+};
+
+type ActiveBattle = {
+  roomId: string;
+  isHost: boolean;
+  initialHp: InitialHpOption;
+  userName: string;
+  sessionId: string;
+  sessionToken: string;
+  role: "PLAYER_1" | "PLAYER_2" | "SPECTATOR";
+  isOwner: boolean;
 };
 
 export const BattleClient = ({
@@ -31,54 +46,29 @@ export const BattleClient = ({
 
   const searchParams = useSearchParams();
   const roomParam = searchParams.get("room");
-  const isHostParam = searchParams.get("host") === "true";
+  const isConfirmingAdmission = searchParams.get("confirm") === "true";
   const initialHpParam: InitialHpOption = normalizeInitialHp(
     searchParams.get("hp"),
   );
-  const nameParam = searchParams.get("name");
 
   const router = useRouter();
 
-  const [activeBattle, setActiveBattle] = useState<{
-    roomId: string;
-    isHost: boolean;
-    initialHp: InitialHpOption;
-    userName: string;
-  } | null>(() => {
-    if (roomParam) {
-      let resolvedName = nameParam || initialUserName;
-      if (!resolvedName && typeof window !== "undefined") {
-        const stored = sessionStorage.getItem("battle_user_name");
-        if (stored) resolvedName = stored;
-      }
-      if (!resolvedName) {
-        const suffix = Math.floor(1000 + Math.random() * 9000);
-        resolvedName = isHostParam ? `Host_${suffix}` : `Guest_${suffix}`;
-        if (typeof window !== "undefined") {
-          sessionStorage.setItem("battle_user_name", resolvedName);
-        }
-      }
-      return {
-        roomId: roomParam,
-        isHost: isHostParam,
-        initialHp: initialHpParam,
-        userName: resolvedName,
-      };
-    }
-    return null;
-  });
+  const pendingAdmission =
+    mounted && roomParam
+      ? getBattleAdmission(roomParam)
+      : null;
+  const [activeBattle, setActiveBattle] = useState<ActiveBattle | null>(null);
+  const [isLobbyOpen, setIsLobbyOpen] = useState(true);
 
-  const lobbyMode = isHostParam ? "create" : "join";
-  const [isLobbyOpen, setIsLobbyOpen] = useState(!roomParam);
-
-  const handleStartBattle = (config: {
-    roomId: string;
-    isHost: boolean;
-    initialHp: InitialHpOption;
-    userName: string;
-  }) => {
+  const handleStartBattle = (config: ActiveBattle) => {
     setActiveBattle(config);
     setIsLobbyOpen(false);
+    clearBattleAdmission(config.roomId);
+    try {
+      sessionStorage.setItem("battle_user_name", config.userName);
+    } catch (error) {
+      console.error("Unable to save the battle display name:", error);
+    }
   };
 
   const handleExit = () => {
@@ -94,14 +84,33 @@ export const BattleClient = ({
     );
   }
 
-  if (activeBattle) {
+  let savedUserName = initialUserName || "";
+  if (!savedUserName) {
+    try {
+      savedUserName = sessionStorage.getItem("battle_user_name") || "";
+    } catch (error) {
+      console.error("Unable to read the saved battle display name:", error);
+    }
+  }
+
+  const battleToRender =
+    activeBattle ??
+    (pendingAdmission && !isConfirmingAdmission
+      ? { ...pendingAdmission, initialHp: initialHpParam }
+      : null);
+
+  if (battleToRender) {
     return (
       <BattleArena
-        roomId={activeBattle.roomId}
-        isHost={activeBattle.isHost}
-        initialHp={activeBattle.initialHp}
+        roomId={battleToRender.roomId}
+        isHost={battleToRender.isHost}
+        initialHp={battleToRender.initialHp}
         userId={initialUserId}
-        userName={activeBattle.userName}
+        userName={battleToRender.userName}
+        sessionId={battleToRender.sessionId}
+        sessionToken={battleToRender.sessionToken}
+        role={battleToRender.role}
+        isOwner={battleToRender.isOwner}
         onExit={handleExit}
       />
     );
@@ -113,8 +122,15 @@ export const BattleClient = ({
         isOpen={isLobbyOpen}
         onClose={() => router.push("/")}
         onStartBattle={handleStartBattle}
-        mode={lobbyMode}
-        defaultUserName={initialUserName}
+        mode="join"
+        initialRoomId={roomParam || ""}
+        defaultUserName={pendingAdmission?.userName || savedUserName}
+        inviteMode={Boolean(roomParam)}
+        existingAdmission={
+          isConfirmingAdmission
+            ? pendingAdmission || undefined
+            : undefined
+        }
       />
     </div>
   );
