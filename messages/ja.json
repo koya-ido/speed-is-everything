@@ -290,6 +290,7 @@
     "device_warning_description": "デバイス環境が異なります（<player>{playerDevice}</player> 対 <opponent>{opponentDevice}</opponent>）。タップ判定速度や遅延特性に差異がある可能性があります。ハンデなしで対戦を続けますか？",
     "device_warning_accepted": "承諾済み",
     "device_warning_pending": "確認待ち",
+    "device_warning_players_confirming": "対戦プレイヤーが確認中...",
     "exit_match": "退出する",
     "device_warning_accepted_button": "承諾完了",
     "device_warning_continue": "同意して続行",

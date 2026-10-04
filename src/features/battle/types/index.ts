@@ -9,6 +9,7 @@ export type BattleRoomRole = "PLAYER_1" | "PLAYER_2" | "SPECTATOR";
 export type BattleRoomParticipant = {
   sessionId: string;
   userName: string;
+  device?: "desktop" | "mobile";
   role: BattleRoomRole;
   joinOrder: number;
   isOwner: boolean;

@@ -1777,6 +1777,17 @@ export const useBattleRoom = ({
         list.forEach((item) => allPresences.push(item));
       });
 
+      setParticipants((current) =>
+        current.map((participant) => {
+          const presence = allPresences.find(
+            (item) => item.sessionId === participant.sessionId,
+          );
+          return presence && participant.device !== presence.device
+            ? { ...participant, device: presence.device }
+            : participant;
+        }),
+      );
+
       // 自身以外のプレイヤーを探す (複数ある場合は最新のものを取得)
       const otherPresences = allPresences.filter(
         (p) =>
