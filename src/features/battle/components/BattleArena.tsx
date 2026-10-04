@@ -222,6 +222,8 @@ export const BattleArena = ({
     [],
   );
   useEffect(() => {
+    // 音量設定は外部の singleton が所有するため、マウント時に UI state へ同期する。
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 外部音量設定を初回表示へ同期するため
     setIsMuted(soundManager.isMuted);
   }, []);
   // HOST側初期HPのローカル選択状態（連打時も即時UI反映し、400msデバウンスで確定送信）
@@ -549,6 +551,14 @@ export const BattleArena = ({
     Math.round(baseDiff * winnerRankBaseMult * 10) / 10,
   );
   const finalDamage = totalDamage;
+  const damageCalculationPlayerName =
+    role === "SPECTATOR"
+      ? isWinnerPlayer
+        ? battleLogPlayerNames.playerName
+        : battleLogPlayerNames.opponentName
+      : isWinnerPlayer
+        ? t("match_you")
+        : opponent?.userName;
 
   // ダメージ計算アニメーション pop-bounce トリガー
   const triggerPopBounce = useCallback(() => {
@@ -600,6 +610,7 @@ export const BattleArena = ({
   // 1~8ステップ アニメーションシーケンサー
   useEffect(() => {
     if (phase !== "RESOLVING") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- ラウンド演出 state をフェーズ変更と同じ effect でリセットするため
       setActiveStep(0);
       setAnimStage("STOP");
       setShowSubNum(false);
@@ -988,7 +999,7 @@ export const BattleArena = ({
 
   return (
     <div
-      className={`relative w-full ${phase === "LOBBY" ? "min-h-dvh" : "h-screen max-h-screen overflow-hidden touch-none"} ${bgEffect} text-white flex flex-col select-none`}
+      className={`relative w-full ${phase === "LOBBY" ? "min-h-dvh" : "h-screen max-h-screen h-dvh max-h-dvh overflow-hidden touch-none"} ${bgEffect} text-white flex flex-col select-none`}
       style={{ WebkitTouchCallout: "none", WebkitUserSelect: "none" }}
       onContextMenu={(e) => e.preventDefault()}
       onPointerDown={(e) => {
@@ -2032,9 +2043,7 @@ export const BattleArena = ({
                         isWinnerPlayer ? "text-[#00f3ff]" : "text-[#ff0055]"
                       }`}
                     >
-                      {isWinnerPlayer
-                        ? `${t("match_you")}:`
-                        : `${opponent?.userName || t("log_opponent")}:`}
+                      {`${damageCalculationPlayerName || t("log_opponent")}:`}
                     </span>
                     <span className="font-mono font-black text-xl sm:text-2xl md:text-3xl text-yellow-300 drop-shadow-[0_0_15px_rgba(234,179,8,0.9)]">
                       -{displaySubNum.toFixed(1)}

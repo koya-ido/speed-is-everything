@@ -10,6 +10,7 @@ import {
   FoulPayload,
   InitialHpOption,
   isReactionEmoji,
+  MatchFinishedPayload,
   MAX_ACTIVE_SPECTATOR_REACTIONS,
   PresencePayload,
   REACTION_COOLDOWN_MS,
@@ -17,6 +18,7 @@ import {
   ReactionEmoji,
   RematchPayload,
   RoundResolutionResult,
+  RoundResolvedPayload,
   RoundStartPayload,
   SPECTATOR_REACTION_DISPLAY_MS,
   SpectatorReaction,
@@ -73,6 +75,74 @@ const isBattleRoundLog = (value: unknown): value is BattleRoundLog => {
     isFiniteNumber(log.damage) &&
     isFiniteNumber(log.playerHpAfter) &&
     isFiniteNumber(log.opponentHpAfter)
+  );
+};
+
+const reverseBattleRoundLog = (log: BattleRoundLog): BattleRoundLog => ({
+  ...log,
+  winner:
+    log.winner === "player"
+      ? "opponent"
+      : log.winner === "opponent"
+        ? "player"
+        : "draw",
+  playerTime: log.opponentTime,
+  playerRank: log.opponentRank,
+  playerFoul: log.opponentFoul,
+  playerComboBefore: log.opponentComboBefore,
+  playerGodlikeComboBefore: log.opponentGodlikeComboBefore,
+  opponentTime: log.playerTime,
+  opponentRank: log.playerRank,
+  opponentFoul: log.playerFoul,
+  opponentComboBefore: log.playerComboBefore,
+  opponentGodlikeComboBefore: log.playerGodlikeComboBefore,
+  playerHpAfter: log.opponentHpAfter,
+  opponentHpAfter: log.playerHpAfter,
+});
+
+const getLocalBattleRoundLogs = (
+  value: unknown,
+  role: BattleRoomRole,
+  isHost: boolean,
+): BattleRoundLog[] | null => {
+  if (!Array.isArray(value)) return null;
+  const logs = value.filter(isBattleRoundLog);
+  if (logs.length !== value.length) return null;
+  if (role === "SPECTATOR" || isHost) return logs;
+  return logs.map(reverseBattleRoundLog);
+};
+
+const isRoundResolvedPayload = (
+  value: unknown,
+): value is RoundResolvedPayload => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const payload = value as Record<string, unknown>;
+  const isAction = (action: unknown) => {
+    if (!action || typeof action !== "object" || Array.isArray(action)) {
+      return false;
+    }
+    const snapshot = action as Record<string, unknown>;
+    const time = snapshot.currentRoundTime;
+    const rank = snapshot.currentRoundRank;
+    const foul = snapshot.currentRoundFoul;
+    return (
+      (time === null ||
+        (typeof time === "number" && Number.isFinite(time))) &&
+      (rank === null ||
+        rank === "NORMAL" ||
+        rank === "EXCELLENT" ||
+        rank === "GODLIKE") &&
+      (foul === null || foul === "early_click" || foul === "too_fast")
+    );
+  };
+  return (
+    Number.isSafeInteger(payload.round) &&
+    typeof payload.round === "number" &&
+    payload.round >= 1 &&
+    isAction(payload.hostAction) &&
+    isAction(payload.guestAction)
   );
 };
 
@@ -187,6 +257,7 @@ export const useBattleRoom = ({
 
   useEffect(() => {
     if (initialUserName) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 親から更新された表示名をプレイヤー state に反映するため
       setPlayer((p) => ({ ...p, userName: initialUserName }));
     }
   }, [initialUserName]);
@@ -321,6 +392,8 @@ export const useBattleRoom = ({
   });
 
   useEffect(() => {
+    // 非同期通信コールバックから同期的に最新 state を読むための mirror ref。
+    // eslint-disable-next-line react-hooks/immutability -- 非同期コールバック用の最新 state ref を更新するため
     stateRef.current = {
       phase,
       player,
@@ -356,6 +429,7 @@ export const useBattleRoom = ({
           setMatchWinner(null);
           setMatchFinishReason(null);
           setRoundLogs([]);
+          roundLogsRef.current = [];
           setRematchRequestedByMe(false);
           rematchRequestedByMeRef.current = false;
           setRematchRequestedByOpponent(false);
@@ -518,22 +592,7 @@ export const useBattleRoom = ({
                 if (!shouldReversePerspective || !isBattleRoundLog(log)) {
                   return log;
                 }
-                return {
-                  ...log,
-                  winner: reverseWinner(log.winner) ?? "draw",
-                  playerTime: log.opponentTime,
-                  playerRank: log.opponentRank,
-                  playerFoul: log.opponentFoul,
-                  playerComboBefore: log.opponentComboBefore,
-                  playerGodlikeComboBefore: log.opponentGodlikeComboBefore,
-                  opponentTime: log.playerTime,
-                  opponentRank: log.playerRank,
-                  opponentFoul: log.playerFoul,
-                  opponentComboBefore: log.playerComboBefore,
-                  opponentGodlikeComboBefore: log.playerGodlikeComboBefore,
-                  playerHpAfter: log.opponentHpAfter,
-                  opponentHpAfter: log.playerHpAfter,
-                };
+                return reverseBattleRoundLog(log);
               })
             : [];
           stateRevisionRef.current = view.room.stateRevision;
@@ -549,6 +608,7 @@ export const useBattleRoom = ({
             shared.roundLogs.every(isBattleRoundLog)
           ) {
             setRoundLogs(restoredRoundLogs);
+            roundLogsRef.current = restoredRoundLogs;
           }
           setMatchWinner(reverseWinner(shared.matchWinner));
           setMatchFinishReason(shared.matchFinishReason);
@@ -742,6 +802,7 @@ export const useBattleRoom = ({
     if (stateRef.current.isHost) return;
     setIsHost(true);
     setPromotedToHost(true);
+    // eslint-disable-next-line react-hooks/immutability -- 昇格直後の非同期処理で最新ホスト状態を読むため
     stateRef.current.isHost = true;
     setPlayer((p) => ({ ...p, isHost: true }));
 
@@ -825,6 +886,7 @@ export const useBattleRoom = ({
       setCurrentRound(round);
       setRoundResult(null);
       evaluatedRoundRef.current = null;
+      // eslint-disable-next-line react-hooks/immutability -- state 更新の反映前にラウンド識別子を更新するため
       stateRef.current.currentRound = round;
 
       if (round === 1) {
@@ -834,6 +896,7 @@ export const useBattleRoom = ({
         rematchRequestedByMeRef.current = false;
         setRematchRequestedByOpponent(false);
         setRoundLogs([]);
+        roundLogsRef.current = [];
       }
 
       // ラウンド用の一時状態をリセット
@@ -930,6 +993,7 @@ export const useBattleRoom = ({
 
       if (roundNum === 1) {
         setRoundLogs([]);
+        roundLogsRef.current = [];
         setPlayer((p) => ({
           ...p,
           hp: currentInitialHp,
@@ -948,6 +1012,7 @@ export const useBattleRoom = ({
               }
             : null,
         );
+        // eslint-disable-next-line react-hooks/immutability -- state 更新の反映前に次ラウンドの同期 state を用意するため
         stateRef.current.player.hp = currentInitialHp;
         stateRef.current.player.combo = 0;
         stateRef.current.player.godlikeCombo = 0;
@@ -987,6 +1052,7 @@ export const useBattleRoom = ({
                 reason: "hp_zero",
                 playerHp: currentPlayerHp,
                 opponentHp: currentOpponentHp,
+                roundLogs: roundLogsRef.current,
               },
             });
           }
@@ -1013,6 +1079,7 @@ export const useBattleRoom = ({
           godlikeCombo: guestState?.godlikeCombo ?? 0,
           comboRank: guestState?.comboRank ?? null,
         },
+        roundLogs: roundLogsRef.current,
       };
 
       if (channelRef.current) {
@@ -1053,6 +1120,28 @@ export const useBattleRoom = ({
       evaluatedRoundRef.current = stateRef.current.currentRound;
 
       setPhase("RESOLVING");
+      // eslint-disable-next-line react-hooks/immutability -- 重複する結果通知を同一ラウンド内で遮断するため
+      stateRef.current.phase = "RESOLVING";
+      const hostState = stateRef.current.isHost ? pState : oState;
+      const guestState = stateRef.current.isHost ? oState : pState;
+      const payload: RoundResolvedPayload = {
+        round: stateRef.current.currentRound,
+        hostAction: {
+          currentRoundTime: hostState.currentRoundTime,
+          currentRoundRank: hostState.currentRoundRank,
+          currentRoundFoul: hostState.currentRoundFoul,
+        },
+        guestAction: {
+          currentRoundTime: guestState.currentRoundTime,
+          currentRoundRank: guestState.currentRoundRank,
+          currentRoundFoul: guestState.currentRoundFoul,
+        },
+      };
+      channelRef.current?.send({
+        type: "broadcast",
+        event: "round_resolved",
+        payload,
+      });
       const res = resolveRound(pState, oState);
       setRoundResult(res);
 
@@ -1083,12 +1172,10 @@ export const useBattleRoom = ({
         opponentHpAfter: res.opponentNewHp,
       };
 
-      setRoundLogs((prev) => {
-        if (prev.some((l) => l.round === logEntry.round)) {
-          return prev;
-        }
-        return [...prev, logEntry];
-      });
+      if (!roundLogsRef.current.some((log) => log.round === logEntry.round)) {
+        roundLogsRef.current = [...roundLogsRef.current, logEntry];
+        setRoundLogs(roundLogsRef.current);
+      }
 
       // ダメージ計算アニメーションの合計時間に合わせて動的に待機時間を設定
       let resolveDelay = 5200;
@@ -1183,6 +1270,7 @@ export const useBattleRoom = ({
                 reason: res.reason || "hp_zero",
                 playerHp: res.playerNewHp,
                 opponentHp: res.opponentNewHp,
+                roundLogs: roundLogsRef.current,
               },
             });
           }
@@ -1223,6 +1311,7 @@ export const useBattleRoom = ({
       soundManager.playGameOver();
       haptics.gameOver();
 
+      // eslint-disable-next-line react-hooks/immutability -- 同じタップ処理内で判定関数が最新 foul 状態を参照するため
       stateRef.current.player = {
         ...stateRef.current.player,
         currentRoundFoul: foulReason,
@@ -1403,6 +1492,7 @@ export const useBattleRoom = ({
     clearAllTimers();
     soundManager.unlock();
     setRoundLogs([]);
+    roundLogsRef.current = [];
     setOpponentReturnedToLobby(false);
     setRoundResult(null);
     setMatchWinner(null);
@@ -1411,6 +1501,7 @@ export const useBattleRoom = ({
     evaluatedRoundRef.current = null;
 
     const currentHp = stateRef.current.initialHp;
+    // eslint-disable-next-line react-hooks/immutability -- reset state の反映前にラウンドを同期するため
     stateRef.current.currentRound = 1;
     stateRef.current.player = {
       ...stateRef.current.player,
@@ -1512,6 +1603,7 @@ export const useBattleRoom = ({
     const now = Date.now();
     hpTimestampRef.current = now;
     setInitialHp(newHp);
+    // eslint-disable-next-line react-hooks/immutability -- broadcast 前に最新 HP を非同期コールバックへ反映するため
     stateRef.current.initialHp = newHp;
     setPlayer((p) => ({ ...p, hp: newHp }));
     setOpponent((o) => (o ? { ...o, hp: newHp } : null));
@@ -1636,6 +1728,7 @@ export const useBattleRoom = ({
   const resetToLobbyState = useCallback(() => {
     clearAllTimers();
     setRoundLogs([]);
+    roundLogsRef.current = [];
     setPhase("LOBBY");
     setCountdown(null);
     setRoundResult(null);
@@ -1648,6 +1741,7 @@ export const useBattleRoom = ({
     setCurrentRound(1);
 
     const currentHp = stateRef.current.initialHp;
+    // eslint-disable-next-line react-hooks/immutability -- reset state の反映前にラウンドを同期するため
     stateRef.current.currentRound = 1;
     stateRef.current.player = {
       ...stateRef.current.player,
@@ -1914,13 +2008,17 @@ export const useBattleRoom = ({
 
     // Broadcast: match_finished (ホストからの決着・終了通知)
     channel.on("broadcast", { event: "match_finished" }, ({ payload }) => {
-      const data = payload as {
-        winner: "player" | "opponent" | "draw" | null;
-        reason: "hp_zero" | "foul" | "opponent_left" | "both_hp_zero";
-        playerHp: number;
-        opponentHp: number;
-      };
+      const data = payload as MatchFinishedPayload;
       clearAllTimers();
+      const localRoundLogs = getLocalBattleRoundLogs(
+        data.roundLogs,
+        stateRef.current.role,
+        stateRef.current.isHost,
+      );
+      if (localRoundLogs) {
+        roundLogsRef.current = localRoundLogs;
+        setRoundLogs(localRoundLogs);
+      }
 
       if (stateRef.current.role === "SPECTATOR") {
         setPlayer((prev) => ({ ...prev, hp: data.playerHp }));
@@ -1973,6 +2071,7 @@ export const useBattleRoom = ({
 
       if (data.round === 1) {
         setRoundLogs([]);
+        roundLogsRef.current = [];
         const hpToSet = data.initialHp || stateRef.current.initialHp;
         setPlayer((p) => ({
           ...p,
@@ -2020,6 +2119,16 @@ export const useBattleRoom = ({
         setMatchWinner(null);
         setMatchFinishReason(null);
         setRoundResult(null);
+      }
+
+      const localRoundLogs = getLocalBattleRoundLogs(
+        data.roundLogs,
+        stateRef.current.role,
+        stateRef.current.isHost,
+      );
+      if (localRoundLogs) {
+        roundLogsRef.current = localRoundLogs;
+        setRoundLogs(localRoundLogs);
       }
 
       // Resolve timers may be throttled while a mobile browser is backgrounded.
@@ -2213,6 +2322,34 @@ export const useBattleRoom = ({
       });
     });
 
+    // Broadcast: round_resolved (相手側で未着の操作イベントを確定値で補完)
+    channel.on("broadcast", { event: "round_resolved" }, ({ payload }) => {
+      if (!isRoundResolvedPayload(payload)) return;
+      const data = payload;
+      if (
+        stateRef.current.role === "SPECTATOR" ||
+        stateRef.current.phase === "MATCH_FINISHED" ||
+        data.round !== stateRef.current.currentRound ||
+        !stateRef.current.opponent
+      ) {
+        return;
+      }
+
+      const localAction = stateRef.current.isHost
+        ? data.hostAction
+        : data.guestAction;
+      const remoteAction = stateRef.current.isHost
+        ? data.guestAction
+        : data.hostAction;
+      const nextPlayer = { ...stateRef.current.player, ...localAction };
+      const nextOpponent = { ...stateRef.current.opponent, ...remoteAction };
+      stateRef.current.player = nextPlayer;
+      stateRef.current.opponent = nextOpponent;
+      setPlayer(nextPlayer);
+      setOpponent(nextOpponent);
+      evaluateRoundIfReady(nextPlayer, nextOpponent);
+    });
+
     // Broadcast: device_warning_open (ホスト→ゲスト)
     channel.on("broadcast", { event: "device_warning_open" }, () => {
       if (stateRef.current.isHost) return;
@@ -2345,6 +2482,7 @@ export const useBattleRoom = ({
       deviceWarningAcceptedByOpponent
     ) {
       if (isHost) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- 両者の承諾後にホストが即座に初回ラウンドを開始するため
         triggerNextRound(1);
       }
     }

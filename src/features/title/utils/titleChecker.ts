@@ -90,8 +90,6 @@ export const checkBattleModeTitles = (
     result,
     remainingHp,
     initialHp = 1500,
-    myDevice,
-    opponentDevice,
     maxGodlikeCombo = 0,
     maxExcellentCombo = 0,
     wasUnder100HpBeforeWin = false,

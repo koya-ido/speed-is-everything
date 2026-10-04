@@ -1,6 +1,7 @@
 "use client";
 
 import { User } from "lucide-react";
+import Image from "next/image";
 import { useState } from "react";
 
 type Props = {
@@ -23,9 +24,12 @@ export const Avatar = ({ src, alt = "Avatar", className = "" }: Props) => {
   }
 
   return (
-    <img
+    <Image
       src={src}
       alt={alt}
+      width={48}
+      height={48}
+      unoptimized
       className={`shrink-0 ${className}`}
       onError={() => setError(true)}
     />
