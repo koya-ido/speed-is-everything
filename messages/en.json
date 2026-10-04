@@ -290,6 +290,7 @@
     "device_warning_description": "Your device environments differ (<player>{playerDevice}</player> vs <opponent>{opponentDevice}</opponent>). Tap response speed and latency may differ. Continue without a handicap?",
     "device_warning_accepted": "Accepted",
     "device_warning_pending": "Awaiting confirmation",
+    "device_warning_players_confirming": "Players are confirming...",
     "exit_match": "Leave Match",
     "device_warning_accepted_button": "Accepted",
     "device_warning_continue": "Agree and Continue",

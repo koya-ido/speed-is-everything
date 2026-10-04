@@ -148,6 +148,24 @@ export const BattleArena = ({
     role === "SPECTATOR"
       ? activePlayerNames.playerTwoName
       : (opponent?.userName ?? null);
+  const warningPlayers =
+    role === "SPECTATOR"
+      ? (["PLAYER_1", "PLAYER_2"] as const).map((playerRole) => {
+          const participant = participants.find(
+            (item) => item.role === playerRole,
+          );
+          return {
+            name: participant?.userName ?? t("log_opponent"),
+            device: participant?.device ?? "desktop",
+          };
+        })
+      : [
+          { name: player.userName, device: player.device },
+          {
+            name: opponent?.userName ?? t("log_opponent"),
+            device: opponent?.device ?? "desktop",
+          },
+        ];
   const connectedSpectators = participants
     .filter(
       (participant) =>
@@ -204,6 +222,8 @@ export const BattleArena = ({
     [],
   );
   useEffect(() => {
+    // 音量設定は外部の singleton が所有するため、マウント時に UI state へ同期する。
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 外部音量設定を初回表示へ同期するため
     setIsMuted(soundManager.isMuted);
   }, []);
   // HOST側初期HPのローカル選択状態（連打時も即時UI反映し、400msデバウンスで確定送信）
@@ -531,6 +551,14 @@ export const BattleArena = ({
     Math.round(baseDiff * winnerRankBaseMult * 10) / 10,
   );
   const finalDamage = totalDamage;
+  const damageCalculationPlayerName =
+    role === "SPECTATOR"
+      ? isWinnerPlayer
+        ? battleLogPlayerNames.playerName
+        : battleLogPlayerNames.opponentName
+      : isWinnerPlayer
+        ? t("match_you")
+        : opponent?.userName;
 
   // ダメージ計算アニメーション pop-bounce トリガー
   const triggerPopBounce = useCallback(() => {
@@ -582,6 +610,7 @@ export const BattleArena = ({
   // 1~8ステップ アニメーションシーケンサー
   useEffect(() => {
     if (phase !== "RESOLVING") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- ラウンド演出 state をフェーズ変更と同じ effect でリセットするため
       setActiveStep(0);
       setAnimStage("STOP");
       setShowSubNum(false);
@@ -970,7 +999,7 @@ export const BattleArena = ({
 
   return (
     <div
-      className={`relative w-full ${phase === "LOBBY" ? "min-h-dvh" : "h-screen max-h-screen overflow-hidden touch-none"} ${bgEffect} text-white flex flex-col select-none`}
+      className={`relative w-full ${phase === "LOBBY" ? "min-h-dvh" : "h-screen max-h-screen h-dvh max-h-dvh overflow-hidden touch-none"} ${bgEffect} text-white flex flex-col select-none`}
       style={{ WebkitTouchCallout: "none", WebkitUserSelect: "none" }}
       onContextMenu={(e) => e.preventDefault()}
       onPointerDown={(e) => {
@@ -1683,7 +1712,15 @@ export const BattleArena = ({
 
             <div className="flex flex-col gap-2 w-full text-xs font-mono text-gray-400 my-2">
               <div className="flex items-center justify-between px-3 py-2 rounded bg-black/40 border border-gray-800">
-                <span>{t("label_you")}:</span>
+                <span className="min-w-0 truncate text-left">
+                  {warningPlayers[0].name} (
+                  {t(
+                    warningPlayers[0].device === "mobile"
+                      ? "device_mobile"
+                      : "device_desktop",
+                  )}
+                  ):
+                </span>
                 <span
                   className={
                     deviceWarningAcceptedByMe
@@ -1697,7 +1734,15 @@ export const BattleArena = ({
                 </span>
               </div>
               <div className="flex items-center justify-between px-3 py-2 rounded bg-black/40 border border-gray-800">
-                <span>{t("log_opponent")}:</span>
+                <span className="min-w-0 truncate text-left">
+                  {warningPlayers[1].name} (
+                  {t(
+                    warningPlayers[1].device === "mobile"
+                      ? "device_mobile"
+                      : "device_desktop",
+                  )}
+                  ):
+                </span>
                 <span
                   className={
                     deviceWarningAcceptedByOpponent
@@ -1712,6 +1757,16 @@ export const BattleArena = ({
               </div>
             </div>
 
+            {role === "SPECTATOR" && (
+              <div className="flex items-center justify-center gap-2 text-sm text-gray-300">
+                <span
+                  aria-hidden="true"
+                  className="h-4 w-4 rounded-full border-2 border-gray-600 border-t-yellow-400 animate-spin"
+                />
+                <span>{t("device_warning_players_confirming")}</span>
+              </div>
+            )}
+
             <div className="flex gap-3 w-full">
               {onExit && (
                 <button
@@ -1721,19 +1776,21 @@ export const BattleArena = ({
                   {t("exit_match")}
                 </button>
               )}
-              <button
-                disabled={deviceWarningAcceptedByMe}
-                onClick={acceptDeviceWarning}
-                className={`flex-1 py-3 rounded-xl font-cyber font-bold text-sm uppercase tracking-wider transition-all ${
-                  deviceWarningAcceptedByMe
-                    ? "bg-gray-800 text-gray-500 cursor-not-allowed"
-                    : "bg-yellow-400 hover:bg-yellow-300 text-black shadow-[0_0_20px_rgba(234,179,8,0.5)] cursor-pointer"
-                }`}
-              >
-                {deviceWarningAcceptedByMe
-                  ? t("device_warning_accepted_button")
-                  : t("device_warning_continue")}
-              </button>
+              {role !== "SPECTATOR" && (
+                <button
+                  disabled={deviceWarningAcceptedByMe}
+                  onClick={acceptDeviceWarning}
+                  className={`flex-1 py-3 rounded-xl font-cyber font-bold text-sm uppercase tracking-wider transition-all ${
+                    deviceWarningAcceptedByMe
+                      ? "bg-gray-800 text-gray-500 cursor-not-allowed"
+                      : "bg-yellow-400 hover:bg-yellow-300 text-black shadow-[0_0_20px_rgba(234,179,8,0.5)] cursor-pointer"
+                  }`}
+                >
+                  {deviceWarningAcceptedByMe
+                    ? t("device_warning_accepted_button")
+                    : t("device_warning_continue")}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1986,9 +2043,7 @@ export const BattleArena = ({
                         isWinnerPlayer ? "text-[#00f3ff]" : "text-[#ff0055]"
                       }`}
                     >
-                      {isWinnerPlayer
-                        ? `${t("match_you")}:`
-                        : `${opponent?.userName || t("log_opponent")}:`}
+                      {`${damageCalculationPlayerName || t("log_opponent")}:`}
                     </span>
                     <span className="font-mono font-black text-xl sm:text-2xl md:text-3xl text-yellow-300 drop-shadow-[0_0_15px_rgba(234,179,8,0.9)]">
                       -{displaySubNum.toFixed(1)}

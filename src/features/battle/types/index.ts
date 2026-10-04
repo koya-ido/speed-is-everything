@@ -9,6 +9,7 @@ export type BattleRoomRole = "PLAYER_1" | "PLAYER_2" | "SPECTATOR";
 export type BattleRoomParticipant = {
   sessionId: string;
   userName: string;
+  device?: "desktop" | "mobile";
   role: BattleRoomRole;
   joinOrder: number;
   isOwner: boolean;
@@ -105,6 +106,18 @@ export type RoundStartPayload = {
   startTime?: number;
   hostState?: RoundPlayerSnapshot;
   guestState?: RoundPlayerSnapshot;
+  roundLogs?: BattleRoundLog[];
+};
+
+export type RoundActionSnapshot = Pick<
+  BattlePlayerState,
+  "currentRoundTime" | "currentRoundRank" | "currentRoundFoul"
+>;
+
+export type RoundResolvedPayload = {
+  round: number;
+  hostAction: RoundActionSnapshot;
+  guestAction: RoundActionSnapshot;
 };
 
 export type SubmitTimePayload = {
@@ -131,6 +144,7 @@ export type MatchFinishedPayload = {
   reason: "hp_zero" | "foul" | "opponent_left" | "both_hp_zero";
   playerHp: number;
   opponentHp: number;
+  roundLogs?: BattleRoundLog[];
 };
 
 export type BattlePlayerState = {
