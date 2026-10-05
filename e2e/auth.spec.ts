@@ -60,8 +60,11 @@ test.describe("Authentication and Onboarding UI Tests", () => {
 
     await page.mouse.click(100, 100);
 
+    const readyText = page.locator("h1").filter({ hasText: /READY/i });
+    await expect(readyText).toBeVisible();
+
     const waitingText = page.locator("h1").filter({ hasText: /STAND BY/i });
-    await expect(waitingText).toBeVisible();
+    await expect(waitingText).toBeVisible({ timeout: 20000 });
 
     // フライングしてリザルト画面を出す
     await page.mouse.click(100, 100);

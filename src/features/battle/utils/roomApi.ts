@@ -32,22 +32,55 @@ type PendingAdmission = {
 };
 
 let pendingAdmission: PendingAdmission | null = null;
+const ADMISSION_STORAGE_PREFIX = "battle_pending_admission:";
 
 export const rememberBattleAdmission = (admission: PendingAdmission) => {
   pendingAdmission = admission;
+  if (typeof window !== "undefined") {
+    try {
+      sessionStorage.setItem(
+        `${ADMISSION_STORAGE_PREFIX}${admission.roomId}`,
+        JSON.stringify(admission),
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }
 };
 
-export const getBattleAdmission = (roomId: string) =>
-  pendingAdmission?.roomId === roomId ? pendingAdmission : null;
+export const getBattleAdmission = (roomId: string): PendingAdmission | null => {
+  if (pendingAdmission?.roomId === roomId) return pendingAdmission;
+  if (typeof window !== "undefined") {
+    try {
+      const raw = sessionStorage.getItem(
+        `${ADMISSION_STORAGE_PREFIX}${roomId}`,
+      );
+      if (raw) {
+        const parsed = JSON.parse(raw) as PendingAdmission;
+        if (parsed?.roomId === roomId) {
+          pendingAdmission = parsed;
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }
+  return null;
+};
 
 export const clearBattleAdmission = (roomId: string) => {
   if (pendingAdmission?.roomId === roomId) pendingAdmission = null;
+  if (typeof window !== "undefined") {
+    try {
+      sessionStorage.removeItem(`${ADMISSION_STORAGE_PREFIX}${roomId}`);
+    } catch {
+      // ignore storage errors
+    }
+  }
 };
 
-const requestJson = async <T>(
-  path: string,
-  init: RequestInit,
-): Promise<T> => {
+const requestJson = async <T>(path: string, init: RequestInit): Promise<T> => {
   const response = await fetch(path, {
     ...init,
     headers: { "Content-Type": "application/json", ...init.headers },
@@ -74,10 +107,13 @@ const requestJson = async <T>(
 };
 
 export const createBattleRoom = async (userName: string) => {
-  const admission = await requestJson<BattleRoomAdmission>("/api/battle/rooms", {
-    method: "POST",
-    body: JSON.stringify({ userName }),
-  });
+  const admission = await requestJson<BattleRoomAdmission>(
+    "/api/battle/rooms",
+    {
+      method: "POST",
+      body: JSON.stringify({ userName }),
+    },
+  );
   saveBattleCredentials(admission.room.code, admission.credentials);
   return admission;
 };
@@ -110,7 +146,10 @@ export const saveBattleCredentials = (
   credentials: BattleRoomCredentials,
 ) => {
   try {
-    sessionStorage.setItem(savedSessionKey(roomId), JSON.stringify(credentials));
+    sessionStorage.setItem(
+      savedSessionKey(roomId),
+      JSON.stringify(credentials),
+    );
   } catch (error) {
     console.error("Unable to save the battle session:", error);
   }
@@ -157,6 +196,7 @@ export const sendBattleSessionRequest = (
   roomId: string,
   credentials: BattleRoomCredentials,
   method: "PATCH" | "DELETE",
+  options?: { keepalive?: boolean },
 ) =>
   fetch(
     `/api/battle/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(credentials.sessionId)}`,
@@ -164,8 +204,23 @@ export const sendBattleSessionRequest = (
       method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(credentials),
+      keepalive: options?.keepalive ?? false,
     },
   );
+
+export const leaveSavedBattleSession = async (roomId: string) => {
+  const credentials = getSavedCredentials(roomId);
+  if (credentials) {
+    clearBattleCredentials(roomId);
+    try {
+      await sendBattleSessionRequest(roomId, credentials, "DELETE", {
+        keepalive: true,
+      });
+    } catch {
+      // ignore network errors
+    }
+  }
+};
 
 export const renameBattleParticipantRequest = (
   roomId: string,

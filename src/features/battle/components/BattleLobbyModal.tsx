@@ -10,7 +10,7 @@ import {
 } from "@/features/battle/utils/roomApi";
 import { ArrowLeft, LogIn, PlusCircle, X, Zap } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type BattleLobbyModalProps = {
   isOpen: boolean;
@@ -64,6 +64,13 @@ export const BattleLobbyModal = ({
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const t = useTranslations("Battle");
+
+  useEffect(() => {
+    if (isOpen) {
+      setUserName(defaultUserName);
+      setError(null);
+    }
+  }, [isOpen, defaultUserName]);
 
   if (!isOpen) return null;
 
@@ -157,24 +164,27 @@ export const BattleLobbyModal = ({
     } catch (reason) {
       const errorCode =
         reason &&
-        typeof reason === "object" &&
-        "code" in reason &&
-        typeof reason.code === "string"
+          typeof reason === "object" &&
+          "code" in reason &&
+          typeof reason.code === "string"
           ? reason.code
           : undefined;
       const isInvalidRoom = ["ROOM_NOT_FOUND", "ROOM_ENDED"].includes(
         errorCode || "",
       );
+      const isRoomFull = errorCode === "ROOM_FULL";
       const isInvalidPlayerName = errorCode === "INVALID_PLAYER_NAME";
 
       setError(
         isInvalidRoom
           ? t("room_invalid")
-          : isInvalidPlayerName
-            ? t("invalid_player_name")
-            : t("room_request_failed"),
+          : isRoomFull
+            ? t("room_full")
+            : isInvalidPlayerName
+              ? t("invalid_player_name")
+              : t("room_request_failed"),
       );
-      if (!isInvalidRoom && !isInvalidPlayerName) {
+      if (!isInvalidRoom && !isInvalidPlayerName && !isRoomFull) {
         console.error("Unable to join a battle room:", reason);
       }
     } finally {
@@ -210,9 +220,8 @@ export const BattleLobbyModal = ({
         {/* モーダルヘッダー（モード専用） */}
         <div className="flex flex-col items-center gap-2 text-center">
           <div
-            className={`flex items-center gap-2 ${
-              mode === "create" ? "text-[#00f3ff]" : "text-[#00ff66]"
-            }`}
+            className={`flex items-center gap-2 ${mode === "create" ? "text-[#00f3ff]" : "text-[#00ff66]"
+              }`}
           >
             {mode === "create" ? (
               <PlusCircle className="w-7 h-7 animate-pulse" />
@@ -249,11 +258,10 @@ export const BattleLobbyModal = ({
               maxLength={15}
               autoFocus={inviteMode}
               autoComplete="nickname"
-              className={`w-full px-4 py-3 rounded-xl bg-black/60 border border-gray-800 outline-none text-white text-sm font-medium transition-colors ${
-                mode === "create"
+              className={`w-full px-4 py-3 rounded-xl bg-black/60 border border-gray-800 outline-none text-white text-sm font-medium transition-colors ${mode === "create"
                   ? "focus:border-[#00f3ff]"
                   : "focus:border-[#00ff66]"
-              }`}
+                }`}
             />
           </div>
         )}
@@ -322,11 +330,11 @@ export const BattleLobbyModal = ({
               </p>
             )}
 
-                    {error && (
-          <p className="text-xs text-[#ff0055] font-mono" role="alert">
-            {error}
-          </p>
-        )}
+            {error && (
+              <p className="text-xs text-[#ff0055] font-mono" role="alert">
+                {error}
+              </p>
+            )}
 
             <button
               type="submit"

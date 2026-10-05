@@ -9,12 +9,13 @@ import {
 import {
   clearBattleAdmission,
   getBattleAdmission,
+  leaveSavedBattleSession,
 } from "@/features/battle/utils/roomApi";
 import { useRouter } from "@/i18n/routing";
 import { useSearchParams } from "next/navigation";
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
-const subscribeToMount = () => () => {};
+const subscribeToMount = () => () => { };
 const getClientMountSnapshot = () => true;
 const getServerMountSnapshot = () => false;
 
@@ -76,16 +77,8 @@ export const BattleClient = ({
     router.push("/");
   };
 
-  if (!mounted) {
-    return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-[#050508] text-[#00f3ff] font-cyber tracking-widest animate-pulse">
-        LOADING BATTLE ARENA...
-      </div>
-    );
-  }
-
   let savedUserName = initialUserName || "";
-  if (!savedUserName) {
+  if (!savedUserName && mounted) {
     try {
       savedUserName = sessionStorage.getItem("battle_user_name") || "";
     } catch (error) {
@@ -98,6 +91,20 @@ export const BattleClient = ({
     (pendingAdmission && !isConfirmingAdmission
       ? { ...pendingAdmission, initialHp: initialHpParam }
       : null);
+
+  useEffect(() => {
+    if (!battleToRender && roomParam && !isConfirmingAdmission) {
+      void leaveSavedBattleSession(roomParam);
+    }
+  }, [battleToRender, roomParam, isConfirmingAdmission]);
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-[#050508] text-[#00f3ff] font-cyber tracking-widest animate-pulse">
+        LOADING BATTLE ARENA...
+      </div>
+    );
+  }
 
   if (battleToRender) {
     return (

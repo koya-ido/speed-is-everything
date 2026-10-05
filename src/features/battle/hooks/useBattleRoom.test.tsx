@@ -153,11 +153,170 @@ describe("useBattleRoom round state synchronization", () => {
 
     expect(result.current.phase).toBe("COUNTDOWN");
     expect(result.current.countdown).toBe(3);
+    expect(result.current.player.hp).toBe(2000);
+    expect(result.current.opponent?.hp).toBe(1800);
+    expect(result.current.opponent?.combo).toBe(1);
     act(() => vi.advanceTimersByTime(1000));
     expect(result.current.countdown).toBe(2);
     act(() => vi.advanceTimersByTime(1000));
     expect(result.current.countdown).toBe(1);
     expect(result.current.handleTap()).toBeNull();
+    unmount();
+  });
+
+  it("synchronizes resolving phase and roundResult to spectators without rebroadcasting", () => {
+    vi.useFakeTimers();
+    const { result, unmount } = renderHook(() =>
+      useBattleRoom({
+        roomId: "123-456",
+        isHost: false,
+        role: "SPECTATOR",
+      }),
+    );
+
+    // ラウンド1の初期化
+    const roundStart = supabaseMocks.handlers["broadcast:round_start"] as
+      ((event: { payload: unknown }) => void) | undefined;
+    act(() =>
+      roundStart?.({
+        payload: {
+          round: 1,
+          delay: 1000,
+          initialHp: 1500,
+        },
+      }),
+    );
+    expect(result.current.phase).toBe("COUNTDOWN");
+
+    // ホストから round_resolved が届く (Host: 180ms GODLIKE, Guest: 300ms NORMAL)
+    supabaseMocks.channel.send.mockClear();
+    const roundResolved = supabaseMocks.handlers[
+      "broadcast:round_resolved"
+    ] as ((event: { payload: unknown }) => void) | undefined;
+
+    act(() =>
+      roundResolved?.({
+        payload: {
+          round: 1,
+          hostAction: {
+            currentRoundTime: 180,
+            currentRoundRank: "GODLIKE",
+            currentRoundFoul: null,
+          },
+          guestAction: {
+            currentRoundTime: 300,
+            currentRoundRank: "NORMAL",
+            currentRoundFoul: null,
+          },
+        },
+      }),
+    );
+
+    expect(result.current.phase).toBe("RESOLVING");
+    expect(result.current.roundResult).not.toBeNull();
+    expect(result.current.roundResult?.winner).toBe("player"); // ホスト勝ち
+    expect(result.current.roundResult?.playerHpBefore).toBe(1500);
+    expect(result.current.roundResult?.opponentHpBefore).toBe(1500);
+    expect(result.current.roundResult?.opponentNewHp).toBeLessThan(1500);
+
+    // 観戦者自身は round_resolved を送信してはならない
+    const sentRoundResolved = supabaseMocks.channel.send.mock.calls.some(
+      (args: unknown[]) =>
+        (args[0] as { event?: string } | undefined)?.event === "round_resolved",
+    );
+    expect(sentRoundResolved).toBe(false);
+
+    // 演出タイマー完了後にローカルの player/opponent HP が新HPに更新される
+    act(() => vi.advanceTimersByTime(10000));
+    expect(result.current.opponent?.hp).toBe(
+      result.current.roundResult?.opponentNewHp,
+    );
+    expect(result.current.player.hp).toBe(1500);
+
+    unmount();
+  });
+
+  it("prevents HP rollback for spectators when round_start arrives after resolving", () => {
+    vi.useFakeTimers();
+    const { result, unmount } = renderHook(() =>
+      useBattleRoom({
+        roomId: "123-456",
+        isHost: false,
+        role: "SPECTATOR",
+      }),
+    );
+
+    // ラウンド1開始
+    const roundStart = supabaseMocks.handlers["broadcast:round_start"] as
+      ((event: { payload: unknown }) => void) | undefined;
+    act(() =>
+      roundStart?.({
+        payload: {
+          round: 1,
+          delay: 1000,
+          initialHp: 1500,
+        },
+      }),
+    );
+
+    // round_resolved 受信
+    const roundResolved = supabaseMocks.handlers[
+      "broadcast:round_resolved"
+    ] as ((event: { payload: unknown }) => void) | undefined;
+
+    act(() =>
+      roundResolved?.({
+        payload: {
+          round: 1,
+          hostAction: {
+            currentRoundTime: 180,
+            currentRoundRank: "GODLIKE",
+            currentRoundFoul: null,
+          },
+          guestAction: {
+            currentRoundTime: 300,
+            currentRoundRank: "NORMAL",
+            currentRoundFoul: null,
+          },
+        },
+      }),
+    );
+
+    const opponentNewHp = result.current.roundResult?.opponentNewHp;
+    expect(opponentNewHp).toBeDefined();
+
+    // 演出タイマー完了前にホストから次ラウンド round_start が届いた場合でも、
+    // hostState / guestState によりHPが減算前の1500に戻らず、新HPが正しく維持される
+    act(() =>
+      roundStart?.({
+        payload: {
+          round: 2,
+          delay: 3000,
+          initialHp: 1500,
+          hostState: {
+            hp: 1500,
+            combo: 1,
+            godlikeCombo: 1,
+            comboRank: "GODLIKE",
+          },
+          guestState: {
+            hp: opponentNewHp,
+            combo: 0,
+            godlikeCombo: 0,
+            comboRank: null,
+          },
+        },
+      }),
+    );
+
+    expect(result.current.phase).toBe("COUNTDOWN");
+    expect(result.current.roundResult).toBeNull();
+    // roundResult が null になっても opponent.hp は古い1500に戻らず新HPであること
+    expect(result.current.opponent?.hp).toBe(opponentNewHp);
+    expect(result.current.opponent?.combo).toBe(0);
+    expect(result.current.player.hp).toBe(1500);
+    expect(result.current.player.combo).toBe(1);
+
     unmount();
   });
 
@@ -741,6 +900,123 @@ describe("useBattleRoom round state synchronization", () => {
 
     expect(sessionStorage.getItem("battle_session:123-456")).toBeNull();
     expect(supabaseMocks.channel.unsubscribe).toHaveBeenCalled();
+    unmount();
+  });
+
+  it("broadcasts match_finished with opponent_left and promotes to host when opponent disconnects mid-match", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ participants: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    supabaseMocks.channel.presenceState.mockReturnValue({
+      host: [
+        {
+          userId: "host-user",
+          userName: "Host",
+          device: "desktop",
+          isReady: true,
+          initialHp: 2000,
+          isHost: true,
+          role: "PLAYER_1",
+        },
+      ],
+    } as any);
+
+    const { result, unmount } = renderHook(() =>
+      useBattleRoom({
+        roomId: "123-456",
+        isHost: false,
+        role: "PLAYER_2",
+        sessionId: "guest-session",
+        sessionToken: "guest-token",
+      }),
+    );
+
+    const presenceSync = supabaseMocks.handlers["presence:sync"] as
+      (() => void) | undefined;
+    act(() => presenceSync?.());
+
+    const roundStart = supabaseMocks.handlers["broadcast:round_start"] as
+      ((event: { payload: unknown }) => void) | undefined;
+    act(() =>
+      roundStart?.({
+        payload: {
+          round: 1,
+          delay: 3000,
+          initialHp: 2000,
+          hostState: {
+            hp: 2000,
+            combo: 0,
+            godlikeCombo: 0,
+            comboRank: null,
+            currentRoundTime: null,
+            currentRoundRank: null,
+            currentRoundFoul: null,
+          },
+        },
+      }),
+    );
+
+    expect(result.current.phase).toBe("COUNTDOWN");
+
+    // Opponent disconnects during the match
+    supabaseMocks.channel.presenceState.mockReturnValue({} as any);
+    act(() => presenceSync?.());
+
+    expect(result.current.phase).toBe("MATCH_FINISHED");
+    expect(result.current.matchWinner).toBe("player");
+    expect(result.current.matchFinishReason).toBe("opponent_left");
+
+    // BUG-05: match_finished must be broadcasted so spectators are not stuck
+    expect(supabaseMocks.channel.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "broadcast",
+        event: "match_finished",
+        payload: expect.objectContaining({
+          reason: "opponent_left",
+        }),
+      }),
+    );
+
+    // BUG-06: Guest is promoted to host even when sessionCredentials exist
+    expect(result.current.isHost).toBe(true);
+
+    unmount();
+  });
+
+  it("promotes to host on returning to lobby when opponent is absent even with session credentials", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ participants: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    supabaseMocks.channel.presenceState.mockReturnValue({} as any);
+
+    const { result, unmount } = renderHook(() =>
+      useBattleRoom({
+        roomId: "123-456",
+        isHost: false,
+        sessionId: "guest-session",
+        sessionToken: "guest-token",
+      }),
+    );
+
+    act(() => result.current.returnToLobby());
+
+    // BUG-06: Promoted to host on lobby reset
+    expect(result.current.isHost).toBe(true);
+
     unmount();
   });
 });

@@ -119,7 +119,7 @@ describe("BattleLobbyModal invite admission", () => {
   it("keeps an invalid invite in the confirmation screen without starting", async () => {
     const consoleError = vi
       .spyOn(console, "error")
-      .mockImplementation(() => {});
+      .mockImplementation(() => { });
     const onStartBattle = vi.fn();
     roomMocks.joinBattleRoom.mockRejectedValue(
       new BattleRoomRequestError("ended", 410, "ROOM_ENDED"),
@@ -231,5 +231,24 @@ describe("BattleLobbyModal invite admission", () => {
         }),
       );
     });
+  });
+
+  it("displays room_full error when joinBattleRoom returns ROOM_FULL", async () => {
+    roomMocks.joinBattleRoom.mockRejectedValue(
+      new BattleRoomRequestError("full", 409, "ROOM_FULL"),
+    );
+    render(
+      <BattleLobbyModal
+        isOpen
+        onClose={vi.fn()}
+        onStartBattle={vi.fn()}
+        mode="join"
+        inviteMode
+        initialRoomId="123-456"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "lobby_join_submit" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("room_full");
   });
 });

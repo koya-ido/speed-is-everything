@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const battleClientMocks = vi.hoisted(() => ({
   clearBattleAdmission: vi.fn(),
   getBattleAdmission: vi.fn(),
+  leaveSavedBattleSession: vi.fn(),
   getSearchParam: vi.fn((name: string) => {
     if (name === "room") return "123-456";
     if (name === "confirm") return "true";
@@ -15,6 +16,7 @@ const battleClientMocks = vi.hoisted(() => ({
 vi.mock("@/features/battle/utils/roomApi", () => ({
   clearBattleAdmission: battleClientMocks.clearBattleAdmission,
   getBattleAdmission: battleClientMocks.getBattleAdmission,
+  leaveSavedBattleSession: battleClientMocks.leaveSavedBattleSession,
 }));
 
 vi.mock("@/features/battle", () => ({
@@ -69,5 +71,36 @@ describe("BattleClient admission confirmation", () => {
     expect(battleClientMocks.getBattleAdmission).toHaveBeenCalledWith(
       "123-456",
     );
+  });
+
+  it("does not leave saved battle session when confirm=true", async () => {
+    battleClientMocks.getSearchParam.mockImplementation((name: string) => {
+      if (name === "room") return "123-456";
+      if (name === "confirm") return "true";
+      return null;
+    });
+
+    render(<BattleClient />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("existing-admission")).toBeInTheDocument();
+    });
+    expect(battleClientMocks.leaveSavedBattleSession).not.toHaveBeenCalled();
+  });
+
+  it("leaves saved battle session when confirm param is not true and battle is not rendered", async () => {
+    battleClientMocks.getBattleAdmission.mockReturnValue(null);
+    battleClientMocks.getSearchParam.mockImplementation((name: string) => {
+      if (name === "room") return "123-456";
+      return null;
+    });
+
+    render(<BattleClient />);
+
+    await waitFor(() => {
+      expect(battleClientMocks.leaveSavedBattleSession).toHaveBeenCalledWith(
+        "123-456",
+      );
+    });
   });
 });
