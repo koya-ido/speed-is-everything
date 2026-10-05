@@ -1,3 +1,4 @@
+import { MAX_ROOM_PARTICIPANTS } from "@/features/battle/types";
 import {
   BattleParticipantRole,
   BattleRoomStatus,
@@ -77,6 +78,19 @@ export const roleForJoin = (
     return BattleParticipantRole.PLAYER_2;
   }
   return BattleParticipantRole.SPECTATOR;
+};
+
+export const selectVacantPlayerRole = (
+  roles: readonly BattleParticipantRole[],
+  fallbackRole: BattleParticipantRole = BattleParticipantRole.SPECTATOR,
+): BattleParticipantRole => {
+  if (!roles.includes(BattleParticipantRole.PLAYER_1)) {
+    return BattleParticipantRole.PLAYER_1;
+  }
+  if (!roles.includes(BattleParticipantRole.PLAYER_2)) {
+    return BattleParticipantRole.PLAYER_2;
+  }
+  return fallbackRole;
 };
 
 export const selectNextGameHost = <
@@ -262,12 +276,17 @@ const ensureUsableRoom = async (tx: Prisma.TransactionClient, code: string) => {
         where: { roomId: room.id, isGameHost: true },
         data: { isGameHost: false },
       });
+      const vacantRole = selectVacantPlayerRole(
+        participants.map((p) => p.role),
+        nextHost.role,
+      );
+
       await tx.battleParticipant.update({
         where: { sessionId: nextHost.sessionId },
         data: {
           role:
             nextHost.role === BattleParticipantRole.SPECTATOR
-              ? BattleParticipantRole.PLAYER_1
+              ? vacantRole
               : nextHost.role,
           isGameHost: true,
         },
@@ -493,6 +512,10 @@ export const joinBattleRoom = async (
         participant: publicParticipant(resumed),
         credentials: { sessionId: resumed.sessionId, token: suppliedToken },
       };
+    }
+
+    if (room.participants.length >= MAX_ROOM_PARTICIPANTS) {
+      throw new BattleRoomError("This room is full.", 409, "ROOM_FULL");
     }
 
     const nextOrder =
@@ -897,17 +920,25 @@ export const battleRoomErrorResponse = (error: unknown) => {
 };
 
 export const optionalBattleUserId = async () => {
-  const { createClient } = await import("@/lib/supabase/server");
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
-  if (error) {
-    console.error("Battle room authentication lookup failed:", error);
+  try {
+    const { createClient } = await import("@/lib/supabase/server");
+    const supabase = await createClient();
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
+    if (error) {
+      console.error("Battle room authentication lookup failed:", error);
+      return undefined;
+    }
+    return user?.id;
+  } catch (error) {
+    console.error(
+      "Battle room authentication lookup threw an exception:",
+      error,
+    );
     return undefined;
   }
-  return user?.id;
 };
 
 export const readSessionCredentials = async (request: Request) => {

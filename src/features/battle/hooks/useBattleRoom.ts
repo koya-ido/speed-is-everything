@@ -128,8 +128,7 @@ const isRoundResolvedPayload = (
     const rank = snapshot.currentRoundRank;
     const foul = snapshot.currentRoundFoul;
     return (
-      (time === null ||
-        (typeof time === "number" && Number.isFinite(time))) &&
+      (time === null || (typeof time === "number" && Number.isFinite(time))) &&
       (rank === null ||
         rank === "NORMAL" ||
         rank === "EXCELLENT" ||
@@ -188,7 +187,7 @@ export const useBattleRoom = ({
     return `user_${Math.random().toString(36).substring(2, 9)}`;
   });
 
-  const [localUserName] = useState(() => {
+  const [localUserName, setLocalUserName] = useState(() => {
     if (initialUserName) return initialUserName;
     if (typeof window !== "undefined") {
       const stored = sessionStorage.getItem("battle_user_name");
@@ -196,6 +195,21 @@ export const useBattleRoom = ({
     }
     return `Agent_${localUserId.slice(-4)}`;
   });
+
+  useEffect(() => {
+    if (initialUserName && initialUserName !== localUserName) {
+      setLocalUserName(initialUserName);
+      if (typeof window !== "undefined") {
+        try {
+          sessionStorage.setItem("battle_user_name", initialUserName);
+        } catch {
+          // ignore storage error
+        }
+      }
+    }
+  }, [initialUserName, localUserName]);
+
+  const currentUserName = initialUserName || localUserName;
 
   const sessionCredentials = useMemo(
     () =>
@@ -270,6 +284,10 @@ export const useBattleRoom = ({
     useState(false);
   const [deviceWarningAcceptedByOpponent, setDeviceWarningAcceptedByOpponent] =
     useState(false);
+  const [deviceWarningAcceptedPlayer1, setDeviceWarningAcceptedPlayer1] =
+    useState(false);
+  const [deviceWarningAcceptedPlayer2, setDeviceWarningAcceptedPlayer2] =
+    useState(false);
 
   // ラウンド結果
   const [roundResult, setRoundResult] = useState<RoundResolutionResult | null>(
@@ -291,6 +309,7 @@ export const useBattleRoom = ({
   const [rematchRequestedByOpponent, setRematchRequestedByOpponent] =
     useState(false);
   const [opponentReturnedToLobby, setOpponentReturnedToLobby] = useState(false);
+  const opponentDisconnectedFromResultRef = useRef(false);
 
   // 通信チャンネルとタイマーの参照
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -414,13 +433,24 @@ export const useBattleRoom = ({
       const becameGameHost = Boolean(
         self?.isGameHost && !stateRef.current.isHost,
       );
-      setParticipants(view.participants);
+      setParticipants((prev) =>
+        view.participants.map((participant) => {
+          const existing = prev.find(
+            (item) => item.sessionId === participant.sessionId,
+          );
+          return existing?.device
+            ? { ...participant, device: existing.device }
+            : participant;
+        }),
+      );
       if (self) {
         const wasSpectating = roleRef.current === "SPECTATOR";
         roleRef.current = self.role;
         setRole(self.role);
         setIsOwner(self.isOwner);
         setIsHost(self.isGameHost);
+        // eslint-disable-next-line react-hooks/immutability -- 同期的なコールバックで最新ホスト状態を参照するため
+        stateRef.current.isHost = self.isGameHost;
         if (wasSpectating && self.role !== "SPECTATOR") {
           setPhase("LOBBY");
           setCountdown(null);
@@ -532,7 +562,11 @@ export const useBattleRoom = ({
             roundLogs?: unknown;
             matchWinner: "player" | "opponent" | "draw" | null;
             matchFinishReason:
-              "hp_zero" | "foul" | "opponent_left" | "both_hp_zero" | null;
+              | "hp_zero"
+              | "foul"
+              | "opponent_left"
+              | "both_hp_zero"
+              | null;
           };
           const shouldReversePerspective =
             becameGameHost && shared.player.userId !== localSessionId;
@@ -570,16 +604,12 @@ export const useBattleRoom = ({
                     shared.roundResult.opponentNewGodlikeCombo,
                   opponentNewGodlikeCombo:
                     shared.roundResult.playerNewGodlikeCombo,
-                  playerNewComboRank:
-                    shared.roundResult.opponentNewComboRank,
-                  opponentNewComboRank:
-                    shared.roundResult.playerNewComboRank,
+                  playerNewComboRank: shared.roundResult.opponentNewComboRank,
+                  opponentNewComboRank: shared.roundResult.playerNewComboRank,
                   playerMultiplier: shared.roundResult.opponentMultiplier,
                   opponentMultiplier: shared.roundResult.playerMultiplier,
-                  playerComboBefore:
-                    shared.roundResult.opponentComboBefore,
-                  opponentComboBefore:
-                    shared.roundResult.playerComboBefore,
+                  playerComboBefore: shared.roundResult.opponentComboBefore,
+                  opponentComboBefore: shared.roundResult.playerComboBefore,
                   playerGodlikeComboBefore:
                     shared.roundResult.opponentGodlikeComboBefore,
                   opponentGodlikeComboBefore:
@@ -629,8 +659,16 @@ export const useBattleRoom = ({
   }, [phase]);
 
   // デバイス不一致チェック
+  const playerOne = participants.find((p) => p.role === "PLAYER_1");
+  const playerTwo = participants.find((p) => p.role === "PLAYER_2");
   const hasDeviceMismatch = Boolean(
-    opponent && player.device !== opponent.device,
+    role === "SPECTATOR"
+      ? playerOne &&
+          playerTwo &&
+          playerOne.device &&
+          playerTwo.device &&
+          playerOne.device !== playerTwo.device
+      : opponent && player.device !== opponent.device,
   );
 
   // ラウンドタイマークリア関数
@@ -798,7 +836,6 @@ export const useBattleRoom = ({
 
   // ホストへの昇格処理（ロビーでホスト退出時）
   const promoteSelfToHost = useCallback(() => {
-    if (sessionCredentials) return;
     if (stateRef.current.isHost) return;
     setIsHost(true);
     setPromotedToHost(true);
@@ -809,7 +846,7 @@ export const useBattleRoom = ({
     if (channelRef.current) {
       const payload: PresencePayload = {
         userId: localUserId,
-        userName: localUserName,
+        userName: currentUserName,
         device: detectedDevice,
         isReady: true,
         initialHp: stateRef.current.initialHp,
@@ -817,12 +854,14 @@ export const useBattleRoom = ({
       };
       channelRef.current.track(payload);
     }
-  }, [detectedDevice, localUserId, localUserName, sessionCredentials]);
+  }, [currentUserName, detectedDevice, localUserId]);
 
   // 部屋退出処理（ブロードキャスト通知付き）
   const leaveRoom = useCallback(() => {
     if (sessionCredentials) {
-      void sendBattleSessionRequest(roomId, sessionCredentials, "DELETE")
+      void sendBattleSessionRequest(roomId, sessionCredentials, "DELETE", {
+        keepalive: true,
+      })
         .then(async (response) => {
           if (!response.ok) {
             throw new Error(`Leaving the room failed (${response.status}).`);
@@ -848,6 +887,25 @@ export const useBattleRoom = ({
     }
     clearAllTimers();
   }, [clearAllTimers, localSessionId, localUserId, roomId, sessionCredentials]);
+
+  // ページアンロード時（リロード、タブ閉じ）に退室リクエストを即座に送信
+  useEffect(() => {
+    if (!sessionCredentials) return;
+    const handlePageHide = () => {
+      try {
+        void sendBattleSessionRequest(roomId, sessionCredentials, "DELETE", {
+          keepalive: true,
+        });
+        clearBattleCredentials(roomId);
+      } catch {
+        // ignore unload errors
+      }
+    };
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, [roomId, sessionCredentials]);
 
   const dissolveRoom = useCallback(async () => {
     if (!sessionCredentials || !isHost) {
@@ -1102,8 +1160,12 @@ export const useBattleRoom = ({
         pState.currentRoundTime !== null || pState.currentRoundFoul !== null;
       const oFinished =
         oState.currentRoundTime !== null || oState.currentRoundFoul !== null;
+      const hasFoul = Boolean(
+        pState.currentRoundFoul || oState.currentRoundFoul,
+      );
 
-      if (!pFinished || !oFinished) {
+      // FOULは即時敗北なので、相手がまだタップしていなくてもラウンドを確定する。
+      if ((!pFinished || !oFinished) && !hasFoul) {
         return;
       }
 
@@ -1122,26 +1184,28 @@ export const useBattleRoom = ({
       setPhase("RESOLVING");
       // eslint-disable-next-line react-hooks/immutability -- 重複する結果通知を同一ラウンド内で遮断するため
       stateRef.current.phase = "RESOLVING";
-      const hostState = stateRef.current.isHost ? pState : oState;
-      const guestState = stateRef.current.isHost ? oState : pState;
-      const payload: RoundResolvedPayload = {
-        round: stateRef.current.currentRound,
-        hostAction: {
-          currentRoundTime: hostState.currentRoundTime,
-          currentRoundRank: hostState.currentRoundRank,
-          currentRoundFoul: hostState.currentRoundFoul,
-        },
-        guestAction: {
-          currentRoundTime: guestState.currentRoundTime,
-          currentRoundRank: guestState.currentRoundRank,
-          currentRoundFoul: guestState.currentRoundFoul,
-        },
-      };
-      channelRef.current?.send({
-        type: "broadcast",
-        event: "round_resolved",
-        payload,
-      });
+      if (stateRef.current.role !== "SPECTATOR") {
+        const hostState = stateRef.current.isHost ? pState : oState;
+        const guestState = stateRef.current.isHost ? oState : pState;
+        const payload: RoundResolvedPayload = {
+          round: stateRef.current.currentRound,
+          hostAction: {
+            currentRoundTime: hostState.currentRoundTime,
+            currentRoundRank: hostState.currentRoundRank,
+            currentRoundFoul: hostState.currentRoundFoul,
+          },
+          guestAction: {
+            currentRoundTime: guestState.currentRoundTime,
+            currentRoundRank: guestState.currentRoundRank,
+            currentRoundFoul: guestState.currentRoundFoul,
+          },
+        };
+        channelRef.current?.send({
+          type: "broadcast",
+          event: "round_resolved",
+          payload,
+        });
+      }
       const res = resolveRound(pState, oState);
       setRoundResult(res);
 
@@ -1450,8 +1514,16 @@ export const useBattleRoom = ({
   const acceptDeviceWarning = useCallback(() => {
     if (stateRef.current.role === "SPECTATOR") return;
     setDeviceWarningAcceptedByMe(true);
+    if (stateRef.current.role === "PLAYER_1") {
+      setDeviceWarningAcceptedPlayer1(true);
+    } else if (stateRef.current.role === "PLAYER_2") {
+      setDeviceWarningAcceptedPlayer2(true);
+    }
     if (channelRef.current) {
-      const payload: DeviceWarningAcceptPayload = { userId: localUserId };
+      const payload: DeviceWarningAcceptPayload = {
+        userId: localUserId,
+        role: stateRef.current.role,
+      };
       channelRef.current.send({
         type: "broadcast",
         event: "device_warning_accept",
@@ -1471,11 +1543,14 @@ export const useBattleRoom = ({
       (!deviceWarningAcceptedByMe || !deviceWarningAcceptedByOpponent)
     ) {
       setPhase("DEVICE_WARNING");
-      // ゲスト側にもデバイス警告モーダルを表示させる
+      // ゲスト・観戦者側にもデバイス警告モーダルを表示させる
       channelRef.current?.send({
         type: "broadcast",
         event: "device_warning_open",
-        payload: {},
+        payload: {
+          playerOneDevice: player.device,
+          playerTwoDevice: opponent?.device ?? "desktop",
+        },
       });
       return;
     }
@@ -1494,6 +1569,7 @@ export const useBattleRoom = ({
     setRoundLogs([]);
     roundLogsRef.current = [];
     setOpponentReturnedToLobby(false);
+    opponentDisconnectedFromResultRef.current = false;
     setRoundResult(null);
     setMatchWinner(null);
     setMatchFinishReason(null);
@@ -1696,7 +1772,7 @@ export const useBattleRoom = ({
           id: reactionId,
           senderId: localSessionId,
           emoji,
-          userName: localUserName,
+          userName: currentUserName,
           receivedAt: now,
           horizontalPosition: 10 + Math.random() * 80,
         });
@@ -1717,11 +1793,11 @@ export const useBattleRoom = ({
           emoji,
           role: senderRole,
           senderId: localSessionId,
-          userName: localUserName,
+          userName: currentUserName,
         },
       });
     },
-    [addSpectatorReaction, localSessionId, localUserName],
+    [addSpectatorReaction, currentUserName, localSessionId],
   );
 
   // 6. ロビーへ戻る（自身をロビー画面へ戻す）
@@ -1734,10 +1810,15 @@ export const useBattleRoom = ({
     setRoundResult(null);
     setMatchWinner(null);
     setMatchFinishReason(null);
+    setDeviceWarningAcceptedByMe(false);
+    setDeviceWarningAcceptedByOpponent(false);
+    setDeviceWarningAcceptedPlayer1(false);
+    setDeviceWarningAcceptedPlayer2(false);
     setRematchRequestedByMe(false);
     rematchRequestedByMeRef.current = false;
     setRematchRequestedByOpponent(false);
     setOpponentReturnedToLobby(false);
+    opponentDisconnectedFromResultRef.current = false;
     setCurrentRound(1);
 
     const currentHp = stateRef.current.initialHp;
@@ -1797,7 +1878,7 @@ export const useBattleRoom = ({
       );
       if (otherPresences.length === 0) {
         setOpponent(null);
-        if (!stateRef.current.isHost && !sessionCredentials) {
+        if (!stateRef.current.isHost) {
           promoteSelfToHost();
         }
       } else {
@@ -1876,9 +1957,20 @@ export const useBattleRoom = ({
           const presence = allPresences.find(
             (item) => item.sessionId === participant.sessionId,
           );
-          return presence && participant.device !== presence.device
-            ? { ...participant, device: presence.device }
-            : participant;
+          if (!presence) return participant;
+          const nextDevice = presence.device ?? participant.device;
+          const nextUserName = presence.userName || participant.userName;
+          if (
+            participant.device === nextDevice &&
+            participant.userName === nextUserName
+          ) {
+            return participant;
+          }
+          return {
+            ...participant,
+            device: nextDevice,
+            userName: nextUserName,
+          };
         }),
       );
 
@@ -1903,6 +1995,10 @@ export const useBattleRoom = ({
         if (hostPromotionTimerRef.current) {
           clearTimeout(hostPromotionTimerRef.current);
           hostPromotionTimerRef.current = null;
+        }
+        if (opponentDisconnectedFromResultRef.current) {
+          opponentDisconnectedFromResultRef.current = false;
+          setOpponentReturnedToLobby(false);
         }
 
         sawOpponentRef.current = true;
@@ -1961,16 +2057,45 @@ export const useBattleRoom = ({
             }
           }
         } else if (stateRef.current.phase === "MATCH_FINISHED") {
-          // リザルト画面で相手が抜けた場合、ホストでなければ昇格
-          if (!stateRef.current.isHost) {
-            promoteSelfToHost();
+          // 再読み込みなど明示的なロビー通知なしの離脱も、短い再接続猶予後に案内する。
+          if (!hostPromotionTimerRef.current) {
+            hostPromotionTimerRef.current = setTimeout(() => {
+              hostPromotionTimerRef.current = null;
+              if (stateRef.current.phase !== "MATCH_FINISHED") return;
+              opponentDisconnectedFromResultRef.current = true;
+              setOpponentReturnedToLobby(true);
+              if (!stateRef.current.isHost) promoteSelfToHost();
+            }, 1500);
           }
         } else {
           // 対戦中の切断判定
           if (sawOpponentRef.current || stateRef.current.opponent) {
+            opponentDisconnectedFromResultRef.current = true;
+            setOpponentReturnedToLobby(true);
             setPhase("MATCH_FINISHED");
             setMatchWinner("player");
             setMatchFinishReason("opponent_left");
+            const wasHost = stateRef.current.isHost;
+            if (!stateRef.current.isHost) {
+              promoteSelfToHost();
+            }
+            if (channelRef.current) {
+              channelRef.current.send({
+                type: "broadcast",
+                event: "match_finished",
+                payload: {
+                  winner: wasHost ? "player" : "opponent",
+                  reason: "opponent_left",
+                  playerHp: wasHost
+                    ? stateRef.current.player.hp
+                    : (stateRef.current.opponent?.hp ?? 0),
+                  opponentHp: wasHost
+                    ? (stateRef.current.opponent?.hp ?? 0)
+                    : stateRef.current.player.hp,
+                  roundLogs: roundLogsRef.current,
+                },
+              });
+            }
           }
         }
       }
@@ -1989,7 +2114,10 @@ export const useBattleRoom = ({
         }
         setOpponent(null);
         sawOpponentRef.current = false;
+        opponentDisconnectedFromResultRef.current = true;
+        setOpponentReturnedToLobby(true);
 
+        const wasHost = stateRef.current.isHost;
         // 相手ホストが退出した場合、現在のフェーズに関わらず新ホストに昇格
         if (data.isHost) {
           promoteSelfToHost();
@@ -2002,6 +2130,23 @@ export const useBattleRoom = ({
           setPhase("MATCH_FINISHED");
           setMatchWinner("player");
           setMatchFinishReason("opponent_left");
+          if (channelRef.current) {
+            channelRef.current.send({
+              type: "broadcast",
+              event: "match_finished",
+              payload: {
+                winner: wasHost ? "player" : "opponent",
+                reason: "opponent_left",
+                playerHp: wasHost
+                  ? stateRef.current.player.hp
+                  : (stateRef.current.opponent?.hp ?? 0),
+                opponentHp: wasHost
+                  ? (stateRef.current.opponent?.hp ?? 0)
+                  : stateRef.current.player.hp,
+                roundLogs: roundLogsRef.current,
+              },
+            });
+          }
         }
       }
     });
@@ -2083,6 +2228,23 @@ export const useBattleRoom = ({
           currentRoundRank: null,
           currentRoundFoul: null,
         }));
+        const defaultOpponentForSpectator: BattlePlayerState | null =
+          stateRef.current.role === "SPECTATOR"
+            ? {
+                userId: "guest",
+                userName: "Guest",
+                device: "desktop",
+                hp: hpToSet,
+                combo: 0,
+                godlikeCombo: 0,
+                comboRank: null,
+                currentRoundTime: null,
+                currentRoundRank: null,
+                currentRoundFoul: null,
+                isReady: true,
+                isHost: false,
+              }
+            : null;
         setOpponent((o) =>
           o
             ? {
@@ -2095,7 +2257,7 @@ export const useBattleRoom = ({
                 currentRoundRank: null,
                 currentRoundFoul: null,
               }
-            : null,
+            : defaultOpponentForSpectator,
         );
         stateRef.current.player.hp = hpToSet;
         stateRef.current.player.combo = 0;
@@ -2112,6 +2274,8 @@ export const useBattleRoom = ({
           stateRef.current.opponent.currentRoundTime = null;
           stateRef.current.opponent.currentRoundRank = null;
           stateRef.current.opponent.currentRoundFoul = null;
+        } else if (defaultOpponentForSpectator) {
+          stateRef.current.opponent = defaultOpponentForSpectator;
         }
         setRematchRequestedByMe(false);
         rematchRequestedByMeRef.current = false;
@@ -2133,20 +2297,40 @@ export const useBattleRoom = ({
 
       // Resolve timers may be throttled while a mobile browser is backgrounded.
       // The host's next-round snapshot is authoritative for HP and combo state.
-      if (
-        data.hostState &&
-        data.guestState &&
-        stateRef.current.role !== "SPECTATOR"
-      ) {
-        const localState = stateRef.current.isHost
-          ? data.hostState
-          : data.guestState;
-        const remoteState = stateRef.current.isHost
-          ? data.guestState
-          : data.hostState;
+      if (data.hostState && data.guestState) {
+        const isSpectator = stateRef.current.role === "SPECTATOR";
+        const localState =
+          stateRef.current.isHost || isSpectator
+            ? data.hostState
+            : data.guestState;
+        const remoteState =
+          stateRef.current.isHost || isSpectator
+            ? data.guestState
+            : data.hostState;
+
+        const defaultRemote: BattlePlayerState = {
+          userId: "remote-player",
+          userName: "Opponent",
+          device: "desktop",
+          hp: remoteState.hp,
+          combo: remoteState.combo,
+          godlikeCombo: remoteState.godlikeCombo,
+          comboRank: remoteState.comboRank ?? null,
+          currentRoundTime: null,
+          currentRoundRank: null,
+          currentRoundFoul: null,
+          isReady: true,
+          isHost: false,
+        };
 
         setPlayer((prev) => ({ ...prev, ...localState }));
-        setOpponent((prev) => (prev ? { ...prev, ...remoteState } : null));
+        setOpponent((prev) =>
+          prev
+            ? { ...prev, ...remoteState }
+            : isSpectator
+              ? defaultRemote
+              : null,
+        );
         stateRef.current.player = {
           ...stateRef.current.player,
           ...localState,
@@ -2156,12 +2340,13 @@ export const useBattleRoom = ({
             ...stateRef.current.opponent,
             ...remoteState,
           };
+        } else if (isSpectator) {
+          stateRef.current.opponent = defaultRemote;
         }
       }
 
       // round > 1 でどちらかのHPがすでに0なら次ラウンドへ進まず決着状態を維持
       if (
-        stateRef.current.role !== "SPECTATOR" &&
         data.round > 1 &&
         (stateRef.current.player.hp <= 0 ||
           (stateRef.current.opponent?.hp ?? 1000) <= 0)
@@ -2326,23 +2511,38 @@ export const useBattleRoom = ({
     channel.on("broadcast", { event: "round_resolved" }, ({ payload }) => {
       if (!isRoundResolvedPayload(payload)) return;
       const data = payload;
+      const isSpectator = stateRef.current.role === "SPECTATOR";
       if (
-        stateRef.current.role === "SPECTATOR" ||
         stateRef.current.phase === "MATCH_FINISHED" ||
         data.round !== stateRef.current.currentRound ||
-        !stateRef.current.opponent
+        (!stateRef.current.opponent && !isSpectator)
       ) {
         return;
       }
 
-      const localAction = stateRef.current.isHost
-        ? data.hostAction
-        : data.guestAction;
-      const remoteAction = stateRef.current.isHost
-        ? data.guestAction
-        : data.hostAction;
+      const localAction =
+        stateRef.current.isHost || isSpectator
+          ? data.hostAction
+          : data.guestAction;
+      const remoteAction =
+        stateRef.current.isHost || isSpectator
+          ? data.guestAction
+          : data.hostAction;
       const nextPlayer = { ...stateRef.current.player, ...localAction };
-      const nextOpponent = { ...stateRef.current.opponent, ...remoteAction };
+      const nextOpponent: BattlePlayerState = stateRef.current.opponent
+        ? { ...stateRef.current.opponent, ...remoteAction }
+        : {
+            userId: "guest",
+            userName: "Guest",
+            device: "desktop",
+            hp: stateRef.current.initialHp,
+            combo: 0,
+            godlikeCombo: 0,
+            comboRank: null,
+            ...remoteAction,
+            isReady: true,
+            isHost: false,
+          };
       stateRef.current.player = nextPlayer;
       stateRef.current.opponent = nextOpponent;
       setPlayer(nextPlayer);
@@ -2350,15 +2550,52 @@ export const useBattleRoom = ({
       evaluateRoundIfReady(nextPlayer, nextOpponent);
     });
 
-    // Broadcast: device_warning_open (ホスト→ゲスト)
-    channel.on("broadcast", { event: "device_warning_open" }, () => {
+    // Broadcast: device_warning_open (ホスト→ゲスト・観戦者)
+    channel.on("broadcast", { event: "device_warning_open" }, (event) => {
       if (stateRef.current.isHost) return;
+      const payload = event?.payload as
+        | {
+            playerOneDevice?: "mobile" | "desktop";
+            playerTwoDevice?: "mobile" | "desktop";
+          }
+        | undefined;
+      if (payload?.playerOneDevice || payload?.playerTwoDevice) {
+        setParticipants((current) =>
+          current.map((p) => {
+            if (p.role === "PLAYER_1" && payload.playerOneDevice) {
+              return { ...p, device: payload.playerOneDevice };
+            }
+            if (p.role === "PLAYER_2" && payload.playerTwoDevice) {
+              return { ...p, device: payload.playerTwoDevice };
+            }
+            return p;
+          }),
+        );
+      }
       setPhase("DEVICE_WARNING");
     });
 
     // Broadcast: device_warning_accept
-    channel.on("broadcast", { event: "device_warning_accept" }, () => {
-      setDeviceWarningAcceptedByOpponent(true);
+    channel.on("broadcast", { event: "device_warning_accept" }, (event) => {
+      const payload = event.payload as DeviceWarningAcceptPayload | undefined;
+      if (payload?.role === "PLAYER_1") {
+        setDeviceWarningAcceptedPlayer1(true);
+      } else if (payload?.role === "PLAYER_2") {
+        setDeviceWarningAcceptedPlayer2(true);
+      }
+      if (
+        stateRef.current.role === "PLAYER_1" &&
+        (!payload?.role || payload.role === "PLAYER_2")
+      ) {
+        setDeviceWarningAcceptedByOpponent(true);
+      } else if (
+        stateRef.current.role === "PLAYER_2" &&
+        (!payload?.role || payload.role === "PLAYER_1")
+      ) {
+        setDeviceWarningAcceptedByOpponent(true);
+      } else if (stateRef.current.role !== "SPECTATOR" && !payload?.role) {
+        setDeviceWarningAcceptedByOpponent(true);
+      }
     });
 
     // Broadcast: rematch_request
@@ -2389,6 +2626,7 @@ export const useBattleRoom = ({
 
     // Broadcast: return_to_lobby (相手がロビーに戻った通知)
     channel.on("broadcast", { event: "return_to_lobby" }, () => {
+      opponentDisconnectedFromResultRef.current = false;
       setOpponentReturnedToLobby(true);
       setRematchRequestedByOpponent(false);
     });
@@ -2424,7 +2662,7 @@ export const useBattleRoom = ({
         const payload: PresencePayload = {
           userId: localUserId,
           sessionId: localSessionId,
-          userName: localUserName,
+          userName: currentUserName,
           device: detectedDevice,
           isReady: role !== "SPECTATOR",
           initialHp: stateRef.current.initialHp,
@@ -2458,7 +2696,7 @@ export const useBattleRoom = ({
     roomId,
     localSessionId,
     localUserId,
-    localUserName,
+    currentUserName,
     detectedDevice,
     initialIsHost,
     role,
@@ -2478,8 +2716,8 @@ export const useBattleRoom = ({
   useEffect(() => {
     if (
       phase === "DEVICE_WARNING" &&
-      deviceWarningAcceptedByMe &&
-      deviceWarningAcceptedByOpponent
+      ((deviceWarningAcceptedPlayer1 && deviceWarningAcceptedPlayer2) ||
+        (deviceWarningAcceptedByMe && deviceWarningAcceptedByOpponent))
     ) {
       if (isHost) {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- 両者の承諾後にホストが即座に初回ラウンドを開始するため
@@ -2488,6 +2726,8 @@ export const useBattleRoom = ({
     }
   }, [
     phase,
+    deviceWarningAcceptedPlayer1,
+    deviceWarningAcceptedPlayer2,
     deviceWarningAcceptedByMe,
     deviceWarningAcceptedByOpponent,
     isHost,
@@ -2534,6 +2774,8 @@ export const useBattleRoom = ({
     hasDeviceMismatch,
     deviceWarningAcceptedByMe,
     deviceWarningAcceptedByOpponent,
+    warningPlayer1Accepted: deviceWarningAcceptedPlayer1,
+    warningPlayer2Accepted: deviceWarningAcceptedPlayer2,
     roundResult,
     matchWinner,
     matchFinishReason,

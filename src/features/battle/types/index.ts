@@ -73,6 +73,8 @@ export const REACTION_COOLDOWN_MS = 1000;
 export const isReactionEmoji = (v: unknown): v is ReactionEmoji =>
   typeof v === "string" && (REACTION_EMOJIS as readonly string[]).includes(v);
 
+export const MAX_ROOM_PARTICIPANTS = 6;
+
 export type PresencePayload = {
   userId: string;
   sessionId?: string;
@@ -137,6 +139,7 @@ export type RematchPayload = {
 
 export type DeviceWarningAcceptPayload = {
   userId: string;
+  role?: BattleRoomRole;
 };
 
 export type MatchFinishedPayload = {

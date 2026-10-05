@@ -114,6 +114,8 @@ export const BattleArena = ({
     hasDeviceMismatch,
     deviceWarningAcceptedByMe,
     deviceWarningAcceptedByOpponent,
+    warningPlayer1Accepted,
+    warningPlayer2Accepted,
     roundResult,
     matchWinner,
     matchFinishReason,
@@ -143,29 +145,90 @@ export const BattleArena = ({
   const activePlayerNames = getActivePlayerNames(participants);
   const battleLogPlayerNames = getBattleLogPlayerNames(participants);
   const leftCardName =
-    role === "SPECTATOR" ? activePlayerNames.playerOneName : player.userName;
+    role === "SPECTATOR" ? activePlayerNames.playerOneName : t("label_you");
   const rightCardName =
     role === "SPECTATOR"
       ? activePlayerNames.playerTwoName
       : (opponent?.userName ?? null);
+
+  const [matchPlayerSnapshot, setMatchPlayerSnapshot] = useState<{
+    playerOneName: string | null;
+    playerTwoName: string | null;
+    battleLogPlayerName: string | null;
+    battleLogOpponentName: string | null;
+    opponent: typeof opponent;
+    opponentUserId: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (phase !== "LOBBY" && phase !== "MATCH_FINISHED") {
+      setMatchPlayerSnapshot({
+        playerOneName: activePlayerNames.playerOneName,
+        playerTwoName: activePlayerNames.playerTwoName,
+        battleLogPlayerName: battleLogPlayerNames.playerName,
+        battleLogOpponentName: battleLogPlayerNames.opponentName,
+        opponent: opponent ? { ...opponent } : null,
+        opponentUserId: opponent?.userId ?? null,
+      });
+    } else if (phase === "MATCH_FINISHED") {
+      setMatchPlayerSnapshot((prev) => {
+        if (!prev) {
+          return {
+            playerOneName: activePlayerNames.playerOneName,
+            playerTwoName: activePlayerNames.playerTwoName,
+            battleLogPlayerName: battleLogPlayerNames.playerName,
+            battleLogOpponentName: battleLogPlayerNames.opponentName,
+            opponent: opponent ? { ...opponent } : null,
+            opponentUserId: opponent?.userId ?? null,
+          };
+        }
+        if (
+          opponent &&
+          prev.opponentUserId &&
+          opponent.userId === prev.opponentUserId
+        ) {
+          return {
+            ...prev,
+            opponent: { ...opponent },
+          };
+        }
+        return prev;
+      });
+    } else if (phase === "LOBBY") {
+      setMatchPlayerSnapshot(null);
+    }
+  }, [
+    phase,
+    activePlayerNames.playerOneName,
+    activePlayerNames.playerTwoName,
+    battleLogPlayerNames.playerName,
+    battleLogPlayerNames.opponentName,
+    opponent,
+  ]);
+
   const warningPlayers =
     role === "SPECTATOR"
       ? (["PLAYER_1", "PLAYER_2"] as const).map((playerRole) => {
-          const participant = participants.find(
-            (item) => item.role === playerRole,
-          );
-          return {
-            name: participant?.userName ?? t("log_opponent"),
-            device: participant?.device ?? "desktop",
-          };
-        })
+        const participant = participants.find(
+          (item) => item.role === playerRole,
+        );
+        return {
+          name:
+            (playerRole === "PLAYER_1"
+              ? activePlayerNames.playerOneName
+              : activePlayerNames.playerTwoName) ??
+            participant?.userName ??
+            t("log_opponent"),
+          device: participant?.device ?? "desktop",
+        };
+      })
       : [
-          { name: player.userName, device: player.device },
-          {
-            name: opponent?.userName ?? t("log_opponent"),
-            device: opponent?.device ?? "desktop",
-          },
-        ];
+        { name: t("label_you"), device: player.device },
+        {
+          name: opponent?.userName ?? t("log_opponent"),
+          device: opponent?.device ?? "desktop",
+        },
+      ];
   const connectedSpectators = participants
     .filter(
       (participant) =>
@@ -294,7 +357,7 @@ export const BattleArena = ({
         setCopiedCode(true);
         setTimeout(() => setCopiedCode(false), 2000);
       }
-    } catch {}
+    } catch { }
   };
 
   const handleExit = () => {
@@ -397,7 +460,15 @@ export const BattleArena = ({
 
   // スクロール制御は画面状態に合わせて切り替える
   useEffect(() => {
-    document.body.classList.toggle("game-active", phase !== "LOBBY");
+    const isGameActive = phase !== "LOBBY";
+    if (
+      isGameActive &&
+      !document.body.classList.contains("game-active")
+    ) {
+      // ロビーでスクロールした位置を body の overflow:hidden で固定しない。
+      window.scrollTo(0, 0);
+    }
+    document.body.classList.toggle("game-active", isGameActive);
   }, [phase]);
 
   // マウント時のオーディオプリロード
@@ -433,27 +504,27 @@ export const BattleArena = ({
   // 表示用コンボ（アニメーション着弾前はラウンド開始前のコンボを表示し、着弾時に更新）
   const displayPlayerCombo =
     phase === "RESOLVING" &&
-    activeStep < 9 &&
-    roundResult?.playerComboBefore !== undefined
+      activeStep < 9 &&
+      roundResult?.playerComboBefore !== undefined
       ? roundResult.playerComboBefore
       : player.combo;
   const displayOpponentCombo =
     phase === "RESOLVING" &&
-    activeStep < 9 &&
-    roundResult?.opponentComboBefore !== undefined
+      activeStep < 9 &&
+      roundResult?.opponentComboBefore !== undefined
       ? roundResult.opponentComboBefore
       : opponent?.combo || 0;
 
   const displayPlayerGodlikeCombo =
     phase === "RESOLVING" &&
-    activeStep < 9 &&
-    roundResult?.playerGodlikeComboBefore !== undefined
+      activeStep < 9 &&
+      roundResult?.playerGodlikeComboBefore !== undefined
       ? roundResult.playerGodlikeComboBefore
       : player.godlikeCombo;
   const displayOpponentGodlikeCombo =
     phase === "RESOLVING" &&
-    activeStep < 9 &&
-    roundResult?.opponentGodlikeComboBefore !== undefined
+      activeStep < 9 &&
+      roundResult?.opponentGodlikeComboBefore !== undefined
       ? roundResult.opponentGodlikeComboBefore
       : opponent?.godlikeCombo || 0;
 
@@ -467,9 +538,9 @@ export const BattleArena = ({
 
   const opponentActiveCombo = opponent
     ? getActiveComboMultiplier(
-        displayOpponentCombo,
-        displayOpponentGodlikeCombo,
-      )
+      displayOpponentCombo,
+      displayOpponentGodlikeCombo,
+    )
     : { multiplier: 1.0, rankType: null };
   const opponentMultiplier = opponentActiveCombo.multiplier;
   const effectiveOpponentComboRank = opponentActiveCombo.rankType;
@@ -1420,11 +1491,10 @@ export const BattleArena = ({
 
               {/* 相手 */}
               <div
-                className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all ${
-                  rightCardName
-                    ? "bg-black/40 border border-[#ff0055]/50"
-                    : "bg-black/20 border border-dashed border-gray-700 animate-pulse"
-                }`}
+                className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all ${rightCardName
+                  ? "bg-black/40 border border-[#ff0055]/50"
+                  : "bg-black/20 border border-dashed border-gray-700 animate-pulse"
+                  }`}
               >
                 {rightCardName ? (
                   <>
@@ -1525,98 +1595,99 @@ export const BattleArena = ({
             {(role === "SPECTATOR" ||
               spectatorCount > 0 ||
               spectatorReaction.length > 0) && (
-              <section className="relative w-full">
-                {!spectatorAccordionOpen && spectatorReaction.length > 0 && (
-                  <div
-                    role="status"
-                    aria-live="polite"
-                    className="absolute left-1/2 top-0 z-10 flex max-w-full -translate-x-1/2 -translate-y-1/2 gap-1 overflow-x-auto px-4 py-4"
-                  >
-                    {spectatorReaction.map((reaction, index) => (
-                      <span
-                        key={reaction.id}
-                        role="img"
-                        aria-label={`${reaction.userName}: ${t("reaction_aria_label", { emoji: reaction.emoji })}`}
-                        className="shrink-0 rounded-full border border-yellow-400/30 bg-black/95 px-2 py-1 text-xl shadow-[0_2px_6px_rgba(0,0,0,0.65),0_0_5px_rgba(250,204,21,0.16)]"
-                        style={{
-                          animation:
-                            "spectator-stamp-lobby 2000ms cubic-bezier(.2,.8,.3,1.2) both",
-                          animationDelay: `${index * 45}ms`,
-                        }}
-                      >
-                        {reaction.emoji}
-                      </span>
+                <section className="relative w-full">
+                  {!spectatorAccordionOpen && spectatorReaction.length > 0 && (
+                    <div
+                      role="status"
+                      aria-live="polite"
+                      className="absolute left-1/2 top-0 z-10 flex max-w-full -translate-x-1/2 -translate-y-1/2 gap-1 overflow-x-auto px-4 py-4"
+                    >
+                      {spectatorReaction.map((reaction, index) => (
+                        <span
+                          key={reaction.id}
+                          role="img"
+                          aria-label={`${reaction.userName}: ${t("reaction_aria_label", { emoji: reaction.emoji })}`}
+                          className="shrink-0 rounded-full border border-yellow-400/30 bg-black/95 px-2 py-1 text-xl shadow-[0_2px_6px_rgba(0,0,0,0.65),0_0_5px_rgba(250,204,21,0.16)]"
+                          style={{
+                            animation:
+                              "spectator-stamp-lobby 2000ms cubic-bezier(.2,.8,.3,1.2) both",
+                            animationDelay: `${index * 45}ms`,
+                          }}
+                        >
+                          {reaction.emoji}
+                        </span>
                       ))}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  aria-expanded={spectatorAccordionOpen}
-                  aria-controls="lobby-spectator-list"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onPointerUp={(event) => event.stopPropagation()}
-                  onClick={() => setSpectatorAccordionOpen((isOpen) => !isOpen)}
-                  className="flex min-h-14 w-full items-center justify-between rounded-xl border border-[#00f3ff]/30 bg-black/40 px-4 py-3 text-left transition-colors hover:bg-[#00f3ff]/5 focus-visible:outline-2 focus-visible:outline-[#00f3ff]"
-                >
-                  <span className="font-cyber text-sm font-bold text-[#00f3ff]">
-                    {t("spectators_waiting", { count: spectatorCount })}
-                  </span>
-                  <ChevronDown
-                    aria-hidden="true"
-                    className={`h-4 w-4 shrink-0 text-[#00f3ff] transition-transform ${
-                      spectatorAccordionOpen ? "rotate-180" : ""
-                    }`}
-                  />
-                </button>
-                <div
-                  id="lobby-spectator-list"
-                  hidden={!spectatorAccordionOpen}
-                  className="mt-2 rounded-xl border border-gray-800 bg-black/30 p-3"
-                >
-                  {role === "SPECTATOR" && (
-                    <div className="mb-2 text-xs text-gray-400">
-                      <p className="font-bold text-[#00f3ff]">
-                        {t("spectator_waiting", { position: queuePosition })}
-                      </p>
-                      <p>{t("spectator_no_match")}</p>
                     </div>
                   )}
-                  {connectedSpectators.length > 0 ? (
-                    <ul className="flex flex-col gap-1">
-                      {connectedSpectators.map((spectator) => {
-                        const reaction = latestReactionBySpectator.get(
-                          spectator.sessionId,
-                        );
-                        return (
-                          <li
-                            key={spectator.sessionId}
-                            className="flex min-h-9 items-center justify-between rounded-lg bg-white/5 px-3 py-1 text-sm text-gray-200"
-                          >
-                            <span className="truncate">
-                              {spectator.userName}
-                            </span>
-                            {reaction && (
-                              <span
-                                aria-label={t("reaction_aria_label", {
-                                  emoji: reaction.emoji,
-                                })}
-                                className="ml-3 shrink-0 text-xl"
-                              >
-                                {reaction.emoji}
+                  <button
+                    type="button"
+                    aria-expanded={spectatorAccordionOpen}
+                    aria-controls="lobby-spectator-list"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onPointerUp={(event) => event.stopPropagation()}
+                    onClick={() => setSpectatorAccordionOpen((isOpen) => !isOpen)}
+                    className="flex min-h-14 w-full items-center justify-between rounded-xl border border-[#00f3ff]/30 bg-black/40 px-4 py-3 text-left transition-colors hover:bg-[#00f3ff]/5 focus-visible:outline-2 focus-visible:outline-[#00f3ff]"
+                  >
+                    <span className="font-cyber text-sm font-bold text-[#00f3ff]">
+                      {t("spectators_waiting", { count: spectatorCount })}
+                    </span>
+                    <ChevronDown
+                      aria-hidden="true"
+                      className={`h-4 w-4 shrink-0 text-[#00f3ff] transition-transform ${spectatorAccordionOpen ? "rotate-180" : ""
+                        }`}
+                    />
+                  </button>
+                  <div
+                    id="lobby-spectator-list"
+                    hidden={!spectatorAccordionOpen}
+                    className="mt-2 rounded-xl border border-gray-800 bg-black/30 p-3"
+                  >
+                    {role === "SPECTATOR" && (
+                      <div className="mb-2 text-xs text-gray-400">
+                        <p className="font-bold text-[#00f3ff]">
+                          {t("spectator_waiting", { position: queuePosition })}
+                        </p>
+                        <p>{t("spectator_no_match")}</p>
+                      </div>
+                    )}
+                    {connectedSpectators.length > 0 ? (
+                      <ul className="flex flex-col gap-1">
+                        {connectedSpectators.map((spectator) => {
+                          const reaction = latestReactionBySpectator.get(
+                            spectator.sessionId,
+                          );
+                          return (
+                            <li
+                              key={spectator.sessionId}
+                              className="flex min-h-9 items-center justify-between rounded-lg bg-white/5 px-3 py-1 text-sm text-gray-200"
+                            >
+                              <span className="truncate">
+                                {spectator.sessionId === sessionId
+                                  ? t("label_you")
+                                  : spectator.userName}
                               </span>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <p className="text-center text-xs text-gray-500">
-                      {t("spectators_waiting", { count: 0 })}
-                    </p>
-                  )}
-                </div>
-              </section>
-            )}
+                              {reaction && (
+                                <span
+                                  aria-label={t("reaction_aria_label", {
+                                    emoji: reaction.emoji,
+                                  })}
+                                  className="ml-3 shrink-0 text-xl"
+                                >
+                                  {reaction.emoji}
+                                </span>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : (
+                      <p className="text-center text-xs text-gray-500">
+                        {t("spectators_waiting", { count: 0 })}
+                      </p>
+                    )}
+                  </div>
+                </section>
+              )}
 
             {/* リアクションスタンプ */}
             <div className="w-full flex items-center justify-center gap-2 p-3 rounded-xl bg-black/40 border border-gray-800">
@@ -1645,11 +1716,10 @@ export const BattleArena = ({
               <button
                 disabled={!opponent}
                 onClick={handleStartMatch}
-                className={`w-full py-4 rounded-xl font-cyber font-bold text-xl uppercase tracking-widest transition-all ${
-                  opponent
-                    ? "bg-[#00ff66] hover:bg-[#33ff88] text-black shadow-[0_0_25px_rgba(0,255,102,0.6)] hover:scale-[1.02] active:scale-95 cursor-pointer"
-                    : "bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700"
-                }`}
+                className={`w-full py-4 rounded-xl font-cyber font-bold text-xl uppercase tracking-widest transition-all ${opponent
+                  ? "bg-[#00ff66] hover:bg-[#33ff88] text-black shadow-[0_0_25px_rgba(0,255,102,0.6)] hover:scale-[1.02] active:scale-95 cursor-pointer"
+                  : "bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700"
+                  }`}
               >
                 {opponent ? t("start") : t("waiting_opponent_caps")}
               </button>
@@ -1682,7 +1752,7 @@ export const BattleArena = ({
       )}
 
       {/* 2. デバイス不一致 警告モーダル */}
-      {phase === "DEVICE_WARNING" && hasDeviceMismatch && (
+      {phase === "DEVICE_WARNING" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
           <div className="glass-panel p-6 md:p-8 rounded-2xl max-w-md w-full border border-yellow-500/40 shadow-[0_0_40px_rgba(234,179,8,0.2)] flex flex-col items-center gap-4 text-center">
             <AlertTriangle className="w-12 h-12 text-yellow-400 animate-bounce" />
@@ -1690,24 +1760,43 @@ export const BattleArena = ({
               {t("device_warning_title")}
             </h2>
             <p className="text-sm text-gray-300 leading-relaxed">
-              {t.rich("device_warning_description", {
-                playerDevice: t(
-                  player.device === "mobile"
-                    ? "device_mobile"
-                    : "device_desktop",
-                ),
-                opponentDevice: t(
-                  opponent?.device === "mobile"
-                    ? "device_mobile"
-                    : "device_desktop",
-                ),
-                player: (chunks) => (
-                  <span className="text-[#00f3ff] font-bold">{chunks}</span>
-                ),
-                opponent: (chunks) => (
-                  <span className="text-[#ff0055] font-bold">{chunks}</span>
-                ),
-              })}
+              {role === "SPECTATOR"
+                ? t.rich("device_warning_spectator_description", {
+                  playerDevice: t(
+                    warningPlayers[0].device === "mobile"
+                      ? "device_mobile"
+                      : "device_desktop",
+                  ),
+                  opponentDevice: t(
+                    warningPlayers[1].device === "mobile"
+                      ? "device_mobile"
+                      : "device_desktop",
+                  ),
+                  player: (chunks) => (
+                    <span className="text-[#00f3ff] font-bold">{chunks}</span>
+                  ),
+                  opponent: (chunks) => (
+                    <span className="text-[#ff0055] font-bold">{chunks}</span>
+                  ),
+                })
+                : t.rich("device_warning_description", {
+                  playerDevice: t(
+                    player.device === "mobile"
+                      ? "device_mobile"
+                      : "device_desktop",
+                  ),
+                  opponentDevice: t(
+                    opponent?.device === "mobile"
+                      ? "device_mobile"
+                      : "device_desktop",
+                  ),
+                  player: (chunks) => (
+                    <span className="text-[#00f3ff] font-bold">{chunks}</span>
+                  ),
+                  opponent: (chunks) => (
+                    <span className="text-[#ff0055] font-bold">{chunks}</span>
+                  ),
+                })}
             </p>
 
             <div className="flex flex-col gap-2 w-full text-xs font-mono text-gray-400 my-2">
@@ -1723,12 +1812,16 @@ export const BattleArena = ({
                 </span>
                 <span
                   className={
-                    deviceWarningAcceptedByMe
+                    (role === "SPECTATOR"
+                      ? warningPlayer1Accepted
+                      : deviceWarningAcceptedByMe)
                       ? "text-[#00ff66]"
                       : "text-yellow-400"
                   }
                 >
-                  {deviceWarningAcceptedByMe
+                  {(role === "SPECTATOR"
+                    ? warningPlayer1Accepted
+                    : deviceWarningAcceptedByMe)
                     ? t("device_warning_accepted")
                     : t("device_warning_pending")}
                 </span>
@@ -1745,12 +1838,16 @@ export const BattleArena = ({
                 </span>
                 <span
                   className={
-                    deviceWarningAcceptedByOpponent
+                    (role === "SPECTATOR"
+                      ? warningPlayer2Accepted
+                      : deviceWarningAcceptedByOpponent)
                       ? "text-[#00ff66]"
                       : "text-yellow-400"
                   }
                 >
-                  {deviceWarningAcceptedByOpponent
+                  {(role === "SPECTATOR"
+                    ? warningPlayer2Accepted
+                    : deviceWarningAcceptedByOpponent)
                     ? t("device_warning_accepted")
                     : t("device_warning_pending")}
                 </span>
@@ -1780,11 +1877,10 @@ export const BattleArena = ({
                 <button
                   disabled={deviceWarningAcceptedByMe}
                   onClick={acceptDeviceWarning}
-                  className={`flex-1 py-3 rounded-xl font-cyber font-bold text-sm uppercase tracking-wider transition-all ${
-                    deviceWarningAcceptedByMe
-                      ? "bg-gray-800 text-gray-500 cursor-not-allowed"
-                      : "bg-yellow-400 hover:bg-yellow-300 text-black shadow-[0_0_20px_rgba(234,179,8,0.5)] cursor-pointer"
-                  }`}
+                  className={`flex-1 py-3 rounded-xl font-cyber font-bold text-sm uppercase tracking-wider transition-all ${deviceWarningAcceptedByMe
+                    ? "bg-gray-800 text-gray-500 cursor-not-allowed"
+                    : "bg-yellow-400 hover:bg-yellow-300 text-black shadow-[0_0_20px_rgba(234,179,8,0.5)] cursor-pointer"
+                    }`}
                 >
                   {deviceWarningAcceptedByMe
                     ? t("device_warning_accepted_button")
@@ -1798,7 +1894,7 @@ export const BattleArena = ({
 
       {/* 3. バトルアリーナ実行部 (COUNTDOWN / WAITING / ACTION / RESOLVING / MATCH_FINISHED) */}
       {phase !== "LOBBY" && phase !== "DEVICE_WARNING" && (
-        <div className="flex-1 flex flex-col w-full h-full relative">
+        <div className="relative flex w-full min-h-0 flex-1 flex-col">
           {/* Cyber Grid Background */}
           <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(0,243,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(0,243,255,0.03)_1px,transparent_1px)] bg-size-[40px_40px] opacity-40 z-0"></div>
 
@@ -1811,29 +1907,31 @@ export const BattleArena = ({
               <div className="flex flex-col items-start gap-1 md:gap-1.5 w-full">
                 <div className="flex items-center justify-between w-full">
                   <div className="flex items-center gap-1.5 md:gap-2">
-                    {player.device === "mobile" ? (
+                    {(role === "SPECTATOR"
+                      ? warningPlayers[0]?.device
+                      : player.device) === "mobile" ? (
                       <Smartphone className="w-3.5 h-3.5 md:w-4 md:h-4 text-[#00f3ff]" />
                     ) : (
                       <Monitor className="w-3.5 h-3.5 md:w-4 md:h-4 text-[#00f3ff]" />
                     )}
                     <span className="font-bold text-white text-xs md:text-sm lg:text-base tracking-wide truncate max-w-17.5 sm:max-w-30 md:max-w-none">
-                      {player.userName}
+                      {role === "SPECTATOR"
+                        ? (activePlayerNames.playerOneName ?? player.userName)
+                        : t("label_you")}
                     </span>
                   </div>
                   {displayPlayerCombo > 0 && (
                     <span
-                      className={`flex items-center gap-0.5 text-[10px] md:text-xs lg:text-sm font-cyber font-bold px-1.5 md:px-2.5 py-0.5 rounded-full border shadow-sm animate-pulse ${
-                        effectivePlayerComboRank === "GODLIKE"
-                          ? "bg-yellow-500/20 text-yellow-300 border-yellow-400/50 shadow-[0_0_10px_rgba(250,204,21,0.4)]"
-                          : "bg-[#00ff66]/20 text-[#00ff66] border-[#00ff66]/40 shadow-[0_0_8px_rgba(0,255,102,0.3)]"
-                      }`}
+                      className={`flex items-center gap-0.5 text-[10px] md:text-xs lg:text-sm font-cyber font-bold px-1.5 md:px-2.5 py-0.5 rounded-full border shadow-sm animate-pulse ${effectivePlayerComboRank === "GODLIKE"
+                        ? "bg-yellow-500/20 text-yellow-300 border-yellow-400/50 shadow-[0_0_10px_rgba(250,204,21,0.4)]"
+                        : "bg-[#00ff66]/20 text-[#00ff66] border-[#00ff66]/40 shadow-[0_0_8px_rgba(0,255,102,0.3)]"
+                        }`}
                     >
                       <Flame
-                        className={`w-3 h-3 md:w-3.5 md:h-3.5 ${
-                          effectivePlayerComboRank === "GODLIKE"
-                            ? "fill-yellow-400 text-yellow-400"
-                            : "fill-[#00ff66] text-[#00ff66]"
-                        }`}
+                        className={`w-3 h-3 md:w-3.5 md:h-3.5 ${effectivePlayerComboRank === "GODLIKE"
+                          ? "fill-yellow-400 text-yellow-400"
+                          : "fill-[#00ff66] text-[#00ff66]"
+                          }`}
                       />
                       {displayPlayerCombo}C ({playerMultiplier.toFixed(1)}x)
                     </span>
@@ -1842,14 +1940,13 @@ export const BattleArena = ({
 
                 {/* HP バー */}
                 <div
-                  className={`w-full h-2.5 md:h-4 lg:h-5 bg-gray-950/90 rounded-full md:rounded-lg overflow-hidden border border-[#00f3ff]/40 md:border-2 md:border-[#00f3ff]/60 p-0.5 shadow-[0_0_12px_rgba(0,243,255,0.25)] transition-all ${
-                    phase === "RESOLVING" &&
+                  className={`w-full h-2.5 md:h-4 lg:h-5 bg-gray-950/90 rounded-full md:rounded-lg overflow-hidden border border-[#00f3ff]/40 md:border-2 md:border-[#00f3ff]/60 p-0.5 shadow-[0_0_12px_rgba(0,243,255,0.25)] transition-all ${phase === "RESOLVING" &&
                     isWinnerOpponent &&
                     (animStage === "IMPACT" || activeStep >= 9) &&
                     totalDamage > 0
-                      ? "effect-hp-shake border-red-500 shadow-[0_0_20px_rgba(255,0,85,0.8)]"
-                      : ""
-                  }`}
+                    ? "effect-hp-shake border-red-500 shadow-[0_0_20px_rgba(255,0,85,0.8)]"
+                    : ""
+                    }`}
                 >
                   <div
                     className="h-full bg-linear-to-r from-[#00f3ff] via-[#00ffcc] to-[#00ff66] rounded-full md:rounded-sm transition-all duration-300 relative overflow-hidden"
@@ -1889,27 +1986,31 @@ export const BattleArena = ({
                 <div className="flex items-center justify-between w-full">
                   {opponent && displayOpponentCombo > 0 && (
                     <span
-                      className={`flex items-center gap-0.5 text-[10px] md:text-xs lg:text-sm font-cyber font-bold px-1.5 md:px-2.5 py-0.5 rounded-full border shadow-sm animate-pulse ${
-                        effectiveOpponentComboRank === "GODLIKE"
-                          ? "bg-yellow-500/20 text-yellow-300 border-yellow-400/50 shadow-[0_0_10px_rgba(250,204,21,0.4)]"
-                          : "bg-[#ff0055]/20 text-[#ff0055] border-[#ff0055]/40 shadow-[0_0_8px_rgba(255,0,85,0.3)]"
-                      }`}
+                      className={`flex items-center gap-0.5 text-[10px] md:text-xs lg:text-sm font-cyber font-bold px-1.5 md:px-2.5 py-0.5 rounded-full border shadow-sm animate-pulse ${effectiveOpponentComboRank === "GODLIKE"
+                        ? "bg-yellow-500/20 text-yellow-300 border-yellow-400/50 shadow-[0_0_10px_rgba(250,204,21,0.4)]"
+                        : "bg-[#ff0055]/20 text-[#ff0055] border-[#ff0055]/40 shadow-[0_0_8px_rgba(255,0,85,0.3)]"
+                        }`}
                     >
                       <Flame
-                        className={`w-3 h-3 md:w-3.5 md:h-3.5 ${
-                          effectiveOpponentComboRank === "GODLIKE"
-                            ? "fill-yellow-400 text-yellow-400"
-                            : "fill-[#ff0055] text-[#ff0055]"
-                        }`}
+                        className={`w-3 h-3 md:w-3.5 md:h-3.5 ${effectiveOpponentComboRank === "GODLIKE"
+                          ? "fill-yellow-400 text-yellow-400"
+                          : "fill-[#ff0055] text-[#ff0055]"
+                          }`}
                       />
                       {displayOpponentCombo}C ({opponentMultiplier.toFixed(1)}x)
                     </span>
                   )}
                   <div className="flex items-center gap-1.5 md:gap-2 ml-auto">
                     <span className="font-bold text-white text-xs md:text-sm lg:text-base tracking-wide truncate max-w-17.5 sm:max-w-30 md:max-w-none">
-                      {opponent?.userName || t("log_opponent")}
+                      {role === "SPECTATOR"
+                        ? (activePlayerNames.playerTwoName ??
+                          opponent?.userName ??
+                          t("log_opponent"))
+                        : (opponent?.userName || t("log_opponent"))}
                     </span>
-                    {opponent?.device === "mobile" ? (
+                    {(role === "SPECTATOR"
+                      ? warningPlayers[1]?.device
+                      : opponent?.device) === "mobile" ? (
                       <Smartphone className="w-3.5 h-3.5 md:w-4 md:h-4 text-[#ff0055]" />
                     ) : (
                       <Monitor className="w-3.5 h-3.5 md:w-4 md:h-4 text-[#ff0055]" />
@@ -1919,14 +2020,13 @@ export const BattleArena = ({
 
                 {/* HP バー */}
                 <div
-                  className={`w-full h-2.5 md:h-4 lg:h-5 bg-gray-950/90 rounded-full md:rounded-lg overflow-hidden border border-[#ff0055]/40 md:border-2 md:border-[#ff0055]/60 p-0.5 shadow-[0_0_12px_rgba(255,0,85,0.25)] transition-all ml-auto ${
-                    phase === "RESOLVING" &&
+                  className={`w-full h-2.5 md:h-4 lg:h-5 bg-gray-950/90 rounded-full md:rounded-lg overflow-hidden border border-[#ff0055]/40 md:border-2 md:border-[#ff0055]/60 p-0.5 shadow-[0_0_12px_rgba(255,0,85,0.25)] transition-all ml-auto ${phase === "RESOLVING" &&
                     isWinnerPlayer &&
                     (animStage === "IMPACT" || activeStep >= 9) &&
                     totalDamage > 0
-                      ? "effect-hp-shake border-white shadow-[0_0_20px_rgba(0,243,255,0.8)]"
-                      : ""
-                  }`}
+                    ? "effect-hp-shake border-white shadow-[0_0_20px_rgba(0,243,255,0.8)]"
+                    : ""
+                    }`}
                 >
                   <div
                     className="h-full bg-linear-to-l from-[#ff0055] via-[#ff007f] to-orange-500 rounded-full md:rounded-sm transition-all duration-300 ml-auto relative overflow-hidden"
@@ -1969,8 +2069,8 @@ export const BattleArena = ({
             className={
               "flex-1 relative flex flex-col items-center justify-center cursor-pointer pointer-events-none" +
               (phase === "RESOLVING" &&
-              playerRank === "GODLIKE" &&
-              roundResult?.winner === "player"
+                playerRank === "GODLIKE" &&
+                roundResult?.winner === "player"
                 ? " effect-shake"
                 : "")
             }
@@ -1980,11 +2080,10 @@ export const BattleArena = ({
               roundResult?.winner === "player" &&
               (playerRank === "GODLIKE" || playerRank === "EXCELLENT") && (
                 <div
-                  className={`absolute inset-0 pointer-events-none z-30 animate-[screen-flash_0.4s_ease-out_forwards] ${
-                    playerRank === "GODLIKE"
-                      ? "bg-linear-to-b from-[#ffd700]/30 via-[#ffaa00]/15 to-transparent"
-                      : "bg-linear-to-b from-[#ff64ff]/25 via-[#bc13fe]/15 to-transparent"
-                  }`}
+                  className={`absolute inset-0 pointer-events-none z-30 animate-[screen-flash_0.4s_ease-out_forwards] ${playerRank === "GODLIKE"
+                    ? "bg-linear-to-b from-[#ffd700]/30 via-[#ffaa00]/15 to-transparent"
+                    : "bg-linear-to-b from-[#ff64ff]/25 via-[#bc13fe]/15 to-transparent"
+                    }`}
                 />
               )}
 
@@ -1993,11 +2092,10 @@ export const BattleArena = ({
               roundResult?.winner === "player" &&
               playerRank !== "NORMAL" && (
                 <div
-                  className={`absolute top-1/2 left-1/2 pointer-events-none z-50 ${
-                    playerRank === "GODLIKE"
-                      ? "animate-[godlike-pop_0.75s_cubic-bezier(0.16,1,0.3,1)_forwards]"
-                      : "animate-[excellent-pop_0.7s_cubic-bezier(0.16,1,0.3,1)_forwards]"
-                  }`}
+                  className={`absolute top-1/2 left-1/2 pointer-events-none z-50 ${playerRank === "GODLIKE"
+                    ? "animate-[godlike-pop_0.75s_cubic-bezier(0.16,1,0.3,1)_forwards]"
+                    : "animate-[excellent-pop_0.7s_cubic-bezier(0.16,1,0.3,1)_forwards]"
+                    }`}
                 >
                   {playerRank === "GODLIKE" ? (
                     <div className="flex flex-col items-center justify-center">
@@ -2031,17 +2129,15 @@ export const BattleArena = ({
                 <div className="absolute top-3 sm:top-5 md:top-8 left-1/2 -translate-x-1/2 flex flex-col items-center justify-center z-30 select-none pointer-events-none animate-in fade-in">
                   {/* 2. 自分の反応速度を 1. の上に -{反応速度} で表示 (勝者＝速い方のタイム) */}
                   <div
-                    className={`flex items-center gap-1.5 mb-0.5 transition-opacity duration-200 ${
-                      showSubNum
-                        ? "opacity-100"
-                        : "opacity-0 pointer-events-none"
-                    }`}
+                    className={`flex items-center gap-1.5 mb-0.5 transition-opacity duration-200 ${showSubNum
+                      ? "opacity-100"
+                      : "opacity-0 pointer-events-none"
+                      }`}
                     style={{ minHeight: "28px" }}
                   >
                     <span
-                      className={`text-xs sm:text-sm font-cyber tracking-widest uppercase font-bold ${
-                        isWinnerPlayer ? "text-[#00f3ff]" : "text-[#ff0055]"
-                      }`}
+                      className={`text-xs sm:text-sm font-cyber tracking-widest uppercase font-bold ${isWinnerPlayer ? "text-[#00f3ff]" : "text-[#ff0055]"
+                        }`}
                     >
                       {`${damageCalculationPlayerName || t("log_opponent")}:`}
                     </span>
@@ -2058,16 +2154,14 @@ export const BattleArena = ({
                     <div className="flex items-baseline justify-center">
                       <span
                         key={popKey}
-                        className={`font-cyber font-black tracking-wider transition-colors duration-150 ${
-                          isPopping
-                            ? "animate-[pop-bounce_0.4s_cubic-bezier(0.175,0.885,0.32,1.275)_both] "
-                            : ""
-                        } ${
-                          activeStep === 8 || activeStep === 9
+                        className={`font-cyber font-black tracking-wider transition-colors duration-150 ${isPopping
+                          ? "animate-[pop-bounce_0.4s_cubic-bezier(0.175,0.885,0.32,1.275)_both] "
+                          : ""
+                          } ${activeStep === 8 || activeStep === 9
                             ? "text-5xl sm:text-6xl md:text-7xl opacity-30 " +
-                              (isWinnerPlayer
-                                ? "text-[#00ff66]"
-                                : "text-[#ff0055]")
+                            (isWinnerPlayer
+                              ? "text-[#00ff66]"
+                              : "text-[#ff0055]")
                             : activeStep >= 6
                               ? winnerRank === "GODLIKE"
                                 ? "text-6xl sm:text-7xl md:text-8xl text-[#ffd700] drop-shadow-[0_0_35px_rgba(255,215,0,1)]"
@@ -2079,7 +2173,7 @@ export const BattleArena = ({
                                 : activeStep === 3
                                   ? "text-6xl sm:text-7xl md:text-8xl text-white drop-shadow-[0_0_25px_rgba(255,255,255,0.9)]"
                                   : "text-6xl sm:text-7xl md:text-8xl text-gray-100 drop-shadow-[0_0_20px_rgba(255,255,255,0.7)]"
-                        }`}
+                          }`}
                       >
                         {displayMainNum.toFixed(1)}
                       </span>
@@ -2093,29 +2187,26 @@ export const BattleArena = ({
                       {showRankBonus && (
                         <div className="flex flex-col items-end md:items-start animate-[calc-step-rank_0.25s_cubic-bezier(0.16,1,0.3,1)_both]">
                           <span
-                            className={`text-[10px] sm:text-xs font-cyber font-black tracking-wider uppercase whitespace-nowrap leading-none mb-1 text-right md:text-left ${
-                              winnerRank === "GODLIKE"
-                                ? "text-[#ffd700] drop-shadow-[0_0_10px_rgba(255,215,0,0.9)]"
-                                : "text-[#ff64ff] drop-shadow-[0_0_10px_rgba(255,100,255,0.9)]"
-                            }`}
+                            className={`text-[10px] sm:text-xs font-cyber font-black tracking-wider uppercase whitespace-nowrap leading-none mb-1 text-right md:text-left ${winnerRank === "GODLIKE"
+                              ? "text-[#ffd700] drop-shadow-[0_0_10px_rgba(255,215,0,0.9)]"
+                              : "text-[#ff64ff] drop-shadow-[0_0_10px_rgba(255,100,255,0.9)]"
+                              }`}
                           >
                             {winnerRank === "GODLIKE"
                               ? t("rank_godlike_bonus")
                               : t("rank_excellent_bonus")}
                           </span>
                           <div
-                            className={`flex items-center gap-1.5 justify-end md:justify-start ${
-                              winnerRank === "GODLIKE"
-                                ? "text-[#ffd700] drop-shadow-[0_0_18px_rgba(255,215,0,1)]"
-                                : "text-[#ff64ff] drop-shadow-[0_0_18px_rgba(255,100,255,1)]"
-                            }`}
+                            className={`flex items-center gap-1.5 justify-end md:justify-start ${winnerRank === "GODLIKE"
+                              ? "text-[#ffd700] drop-shadow-[0_0_18px_rgba(255,215,0,1)]"
+                              : "text-[#ff64ff] drop-shadow-[0_0_18px_rgba(255,100,255,1)]"
+                              }`}
                           >
                             <Zap
-                              className={`w-4 h-4 sm:w-5 sm:h-5 animate-bounce ${
-                                winnerRank === "GODLIKE"
-                                  ? "fill-[#ffd700] text-[#ffd700]"
-                                  : "fill-[#ff64ff] text-[#ff64ff]"
-                              }`}
+                              className={`w-4 h-4 sm:w-5 sm:h-5 animate-bounce ${winnerRank === "GODLIKE"
+                                ? "fill-[#ffd700] text-[#ffd700]"
+                                : "fill-[#ff64ff] text-[#ff64ff]"
+                                }`}
                             />
                             <span className="font-cyber font-black text-2xl sm:text-3xl md:text-4xl leading-none">
                               ×{winnerRankBaseMult.toFixed(1)}
@@ -2126,29 +2217,26 @@ export const BattleArena = ({
                       {showComboBonus && (
                         <div className="flex flex-col items-end md:items-start animate-[calc-step-combo_0.25s_cubic-bezier(0.16,1,0.3,1)_both]">
                           <span
-                            className={`text-[10px] sm:text-xs font-cyber font-black tracking-wider uppercase whitespace-nowrap leading-none mb-1 text-right md:text-left ${
-                              winnerBonusType === "GODLIKE"
-                                ? "text-[#ffd700] drop-shadow-[0_0_10px_rgba(255,215,0,0.9)]"
-                                : "text-[#ff64ff] drop-shadow-[0_0_10px_rgba(255,100,255,0.9)]"
-                            }`}
+                            className={`text-[10px] sm:text-xs font-cyber font-black tracking-wider uppercase whitespace-nowrap leading-none mb-1 text-right md:text-left ${winnerBonusType === "GODLIKE"
+                              ? "text-[#ffd700] drop-shadow-[0_0_10px_rgba(255,215,0,0.9)]"
+                              : "text-[#ff64ff] drop-shadow-[0_0_10px_rgba(255,100,255,0.9)]"
+                              }`}
                           >
                             {winnerBonusType === "GODLIKE"
                               ? t("rank_godlike_combo_bonus")
                               : t("rank_excellent_combo_bonus")}
                           </span>
                           <div
-                            className={`flex items-center gap-1.5 justify-end md:justify-start ${
-                              winnerBonusType === "GODLIKE"
-                                ? "text-[#ffd700] drop-shadow-[0_0_18px_rgba(255,215,0,1)]"
-                                : "text-[#ff64ff] drop-shadow-[0_0_18px_rgba(255,100,255,1)]"
-                            }`}
+                            className={`flex items-center gap-1.5 justify-end md:justify-start ${winnerBonusType === "GODLIKE"
+                              ? "text-[#ffd700] drop-shadow-[0_0_18px_rgba(255,215,0,1)]"
+                              : "text-[#ff64ff] drop-shadow-[0_0_18px_rgba(255,100,255,1)]"
+                              }`}
                           >
                             <Flame
-                              className={`w-4 h-4 sm:w-5 sm:h-5 animate-pulse ${
-                                winnerBonusType === "GODLIKE"
-                                  ? "fill-[#ffd700] text-[#ffd700]"
-                                  : "fill-[#ff64ff] text-[#ff64ff]"
-                              }`}
+                              className={`w-4 h-4 sm:w-5 sm:h-5 animate-pulse ${winnerBonusType === "GODLIKE"
+                                ? "fill-[#ffd700] text-[#ffd700]"
+                                : "fill-[#ff64ff] text-[#ff64ff]"
+                                }`}
                             />
                             <span className="font-cyber font-black text-2xl sm:text-3xl md:text-4xl leading-none">
                               ×{winnerComboMult.toFixed(1)}
@@ -2396,8 +2484,29 @@ export const BattleArena = ({
         isSpectator={role === "SPECTATOR"}
         winner={matchWinner}
         finishReason={matchFinishReason}
-        player={player}
-        opponent={opponent}
+        player={
+          role === "SPECTATOR"
+            ? {
+              ...player,
+              userName:
+                matchPlayerSnapshot?.playerOneName ??
+                activePlayerNames.playerOneName ??
+                player.userName,
+            }
+            : player
+        }
+        opponent={
+          role === "SPECTATOR"
+            ? {
+              ...(matchPlayerSnapshot?.opponent ?? opponent ?? { hp: 0, combo: 0 }),
+              userName:
+                matchPlayerSnapshot?.playerTwoName ??
+                activePlayerNames.playerTwoName ??
+                opponent?.userName ??
+                t("log_opponent"),
+            }
+            : (matchPlayerSnapshot?.opponent ?? opponent)
+        }
         opponentReturnedToLobby={opponentReturnedToLobby}
         rematchRequestedByMe={rematchRequestedByMe}
         rematchRequestedByOpponent={rematchRequestedByOpponent}
@@ -2413,13 +2522,17 @@ export const BattleArena = ({
         isSpectator={role === "SPECTATOR"}
         playerName={
           role === "SPECTATOR"
-            ? (battleLogPlayerNames.playerName ?? undefined)
+            ? (matchPlayerSnapshot?.battleLogPlayerName ??
+              battleLogPlayerNames.playerName ??
+              undefined)
             : undefined
         }
         opponentName={
           role === "SPECTATOR"
-            ? (battleLogPlayerNames.opponentName ?? undefined)
-            : opponent?.userName
+            ? (matchPlayerSnapshot?.battleLogOpponentName ??
+              battleLogPlayerNames.opponentName ??
+              undefined)
+            : (matchPlayerSnapshot?.opponent?.userName ?? opponent?.userName)
         }
         onClose={() => setShowBattleLog(false)}
       />

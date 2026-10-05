@@ -4,6 +4,7 @@ import {
   RECONNECT_GRACE_MS,
   roleForJoin,
   selectNextGameHost,
+  selectVacantPlayerRole,
 } from "@/features/battle/server/rooms";
 import { BattleParticipantRole } from "@/generated/prisma/client";
 import { describe, expect, it } from "vitest";
@@ -38,6 +39,33 @@ describe("battle room validation", () => {
         BattleParticipantRole.PLAYER_1,
         BattleParticipantRole.PLAYER_2,
       ]),
+    ).toBe(BattleParticipantRole.SPECTATOR);
+  });
+
+  it("selects vacant player slots without creating duplicate player roles", () => {
+    // When no PLAYER_1 exists, assigns PLAYER_1
+    expect(selectVacantPlayerRole([])).toBe(BattleParticipantRole.PLAYER_1);
+    expect(
+      selectVacantPlayerRole([
+        BattleParticipantRole.PLAYER_2,
+        BattleParticipantRole.SPECTATOR,
+      ]),
+    ).toBe(BattleParticipantRole.PLAYER_1);
+
+    // When PLAYER_1 exists but PLAYER_2 is vacant, assigns PLAYER_2
+    expect(
+      selectVacantPlayerRole([
+        BattleParticipantRole.PLAYER_1,
+        BattleParticipantRole.SPECTATOR,
+      ]),
+    ).toBe(BattleParticipantRole.PLAYER_2);
+
+    // When both PLAYER_1 and PLAYER_2 exist, keeps fallback role (does not duplicate)
+    expect(
+      selectVacantPlayerRole(
+        [BattleParticipantRole.PLAYER_1, BattleParticipantRole.PLAYER_2],
+        BattleParticipantRole.SPECTATOR,
+      ),
     ).toBe(BattleParticipantRole.SPECTATOR);
   });
 

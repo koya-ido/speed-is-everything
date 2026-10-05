@@ -85,13 +85,12 @@ export const BattleRoundLogModal = ({
               return (
                 <div
                   key={log.round}
-                  className={`p-3.5 rounded-xl border bg-black/60 transition-all ${
-                    isPlayerWin
+                  className={`p-3.5 rounded-xl border bg-black/60 transition-all ${isPlayerWin
                       ? "border-[#00f3ff]/40 shadow-[0_0_12px_rgba(0,243,255,0.1)]"
                       : isOpponentWin
                         ? "border-[#ff0055]/40 shadow-[0_0_12px_rgba(255,0,85,0.1)]"
                         : "border-gray-700/60"
-                  }`}
+                    }`}
                 >
                   <div className="flex items-center justify-between pb-2 mb-2 border-b border-gray-800/80">
                     <span className="font-cyber font-bold text-xs md:text-sm text-gray-300 flex items-center gap-1.5">
@@ -101,13 +100,12 @@ export const BattleRoundLogModal = ({
                       <span>{t("log_round", { round: log.round })}</span>
                     </span>
                     <span
-                      className={`text-xs font-cyber font-bold px-2 py-0.5 rounded-full ${
-                        isPlayerWin
+                      className={`text-xs font-cyber font-bold px-2 py-0.5 rounded-full ${isPlayerWin
                           ? "bg-[#00f3ff]/20 text-[#00f3ff] border border-[#00f3ff]/40"
                           : isOpponentWin
                             ? "bg-[#ff0055]/20 text-[#ff0055] border border-[#ff0055]/40"
                             : "bg-gray-700/50 text-gray-300 border border-gray-600"
-                      }`}
+                        }`}
                     >
                       {isSpectator && !isRoundDraw
                         ? t("log_named_win", { name: roundWinnerName })
@@ -128,11 +126,10 @@ export const BattleRoundLogModal = ({
                       </span>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span
-                          className={`font-bold font-mono ${
-                            log.playerFoul
+                          className={`font-bold font-mono ${log.playerFoul
                               ? "text-red-400 text-[11px]"
                               : "text-white text-sm"
-                          }`}
+                            }`}
                         >
                           {log.playerFoul
                             ? formatFoul(log.playerFoul)
@@ -140,13 +137,12 @@ export const BattleRoundLogModal = ({
                         </span>
                         {log.playerRank && !log.playerFoul && (
                           <span
-                            className={`text-[9px] px-1.5 py-0.5 rounded font-cyber font-bold ${
-                              log.playerRank === "GODLIKE"
+                            className={`text-[9px] px-1.5 py-0.5 rounded font-cyber font-bold ${log.playerRank === "GODLIKE"
                                 ? "bg-yellow-500/20 text-yellow-300 border border-yellow-400/40"
                                 : log.playerRank === "EXCELLENT"
                                   ? "bg-purple-500/20 text-purple-300 border border-purple-400/40"
                                   : "bg-blue-500/20 text-blue-300 border border-blue-400/40"
-                            }`}
+                              }`}
                           >
                             {log.playerRank}
                           </span>
@@ -175,23 +171,21 @@ export const BattleRoundLogModal = ({
                       <div className="flex items-center gap-1.5 justify-end flex-wrap">
                         {log.opponentRank && !log.opponentFoul && (
                           <span
-                            className={`text-[9px] px-1.5 py-0.5 rounded font-cyber font-bold ${
-                              log.opponentRank === "GODLIKE"
+                            className={`text-[9px] px-1.5 py-0.5 rounded font-cyber font-bold ${log.opponentRank === "GODLIKE"
                                 ? "bg-yellow-500/20 text-yellow-300 border border-yellow-400/40"
                                 : log.opponentRank === "EXCELLENT"
                                   ? "bg-purple-500/20 text-purple-300 border border-purple-400/40"
                                   : "bg-blue-500/20 text-blue-300 border border-blue-400/40"
-                            }`}
+                              }`}
                           >
                             {log.opponentRank}
                           </span>
                         )}
                         <span
-                          className={`font-bold font-mono ${
-                            log.opponentFoul
+                          className={`font-bold font-mono ${log.opponentFoul
                               ? "text-red-400 text-[11px]"
                               : "text-white text-sm"
-                          }`}
+                            }`}
                         >
                           {log.opponentFoul
                             ? formatFoul(log.opponentFoul)
@@ -214,10 +208,10 @@ export const BattleRoundLogModal = ({
                           {t("log_difference")}:{" "}
                           <span className="text-white font-bold">
                             {log.playerTime !== null &&
-                            log.opponentTime !== null
+                              log.opponentTime !== null
                               ? Math.abs(
-                                  log.playerTime - log.opponentTime,
-                                ).toFixed(1)
+                                log.playerTime - log.opponentTime,
+                              ).toFixed(1)
                               : "0.0"}
                             ms
                           </span>
@@ -231,11 +225,10 @@ export const BattleRoundLogModal = ({
                         )}
                         {log.appliedComboMult && log.appliedComboMult > 1 && (
                           <span
-                            className={`font-bold ${
-                              log.appliedBonusType === "GODLIKE"
+                            className={`font-bold ${log.appliedBonusType === "GODLIKE"
                                 ? "text-yellow-400"
                                 : "text-emerald-400"
-                            }`}
+                              }`}
                           >
                             {t("log_combo_multiplier", {
                               multiplier: log.appliedComboMult.toFixed(1),
@@ -244,30 +237,45 @@ export const BattleRoundLogModal = ({
                         )}
                       </div>
                       <span
-                        className={`font-cyber font-bold text-xs ${
-                          isPlayerWin ? "text-[#00f3ff]" : "text-[#ff0055]"
-                        }`}
+                        className={`font-cyber font-bold text-xs ${isPlayerWin ? "text-[#00f3ff]" : "text-[#ff0055]"
+                          }`}
                       >
-                        {t(
-                          isPlayerWin ? "log_damage_dealt" : "log_damage_taken",
-                          {
+                        {isSpectator
+                          ? t("log_spectator_damage", {
                             damage: log.damage.toFixed(1),
-                          },
-                        )}
+                          })
+                          : t(
+                            isPlayerWin
+                              ? "log_damage_dealt"
+                              : "log_damage_taken",
+                            {
+                              damage: log.damage.toFixed(1),
+                            },
+                          )}
                       </span>
                     </div>
                   )}
 
                   <div className="mt-1.5 flex items-center justify-between text-[10px] text-gray-500 font-mono">
                     <span>
-                      {t("log_player_hp", {
-                        hp: log.playerHpAfter.toFixed(1),
-                      })}
+                      {isSpectator
+                        ? t("log_spectator_player_hp", {
+                          name: playerName || t("player_one"),
+                          hp: log.playerHpAfter.toFixed(1),
+                        })
+                        : t("log_player_hp", {
+                          hp: log.playerHpAfter.toFixed(1),
+                        })}
                     </span>
                     <span>
-                      {t("log_opponent_hp", {
-                        hp: log.opponentHpAfter.toFixed(1),
-                      })}
+                      {isSpectator
+                        ? t("log_spectator_opponent_hp", {
+                          name: opponentName || t("player_two"),
+                          hp: log.opponentHpAfter.toFixed(1),
+                        })
+                        : t("log_opponent_hp", {
+                          hp: log.opponentHpAfter.toFixed(1),
+                        })}
                     </span>
                   </div>
                 </div>
