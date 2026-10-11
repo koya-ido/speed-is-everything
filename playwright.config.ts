@@ -1,4 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
+import os from "node:os";
+import path from "node:path";
+
+// .last-run.json のプロジェクト内生成を防止
+process.env.PLAYWRIGHT_LAST_RUN_OUTPUT_FILE =
+  process.env.PLAYWRIGHT_LAST_RUN_OUTPUT_FILE ??
+  (process.platform === "win32"
+    ? path.join(os.tmpdir(), ".last-run.json")
+    : "/dev/null");
 
 /**
  * See https://playwright.dev/docs/test-configuration.
@@ -14,7 +23,7 @@ export default defineConfig({
   /* タイマー依存のゲームE2EがFirefoxで不安定になるため、並列数を抑える */
   workers: process.env.CI ? 1 : 2,
   /* Reporter to use. See https://playwright.dev/docs/test-reporters */
-  reporter: [["html", { open: "never" }]],
+  reporter: "list",
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */

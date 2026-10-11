@@ -15,7 +15,7 @@ import {
 
 export const ROOM_LIFETIME_MS = 24 * 60 * 60 * 1000;
 export const RECONNECT_GRACE_MS = 3 * 60 * 1000;
-const SESSION_ONLINE_MS = 15 * 1000;
+export const SESSION_ONLINE_MS = 60 * 1000;
 
 type EndedRoomResult = { roomEndedError: BattleRoomError };
 
@@ -31,9 +31,43 @@ const unwrapEndedRoomResult = <T>(result: T | EndedRoomResult): T => {
   return result as T;
 };
 
-const inRoomTransaction = <T>(
+const inRoomTransaction = async <T>(
   work: (tx: Prisma.TransactionClient) => Promise<T | EndedRoomResult>,
-) => prisma.$transaction(work).then(unwrapEndedRoomResult);
+  maxRetries = 3,
+): Promise<T> => {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const result = await prisma.$transaction(work, {
+        timeout: 10000,
+        maxWait: 5000,
+      });
+      return unwrapEndedRoomResult(result);
+    } catch (error: unknown) {
+      const isRetryable =
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === "P2034" ||
+          error.code === "P2028" ||
+          error.code === "P2024");
+      const message = error instanceof Error ? error.message : "";
+      const isDeadlock =
+        message.includes("deadlock") ||
+        message.includes("write conflict") ||
+        message.includes("40P01") ||
+        message.includes("40001") ||
+        message.includes("55P03") ||
+        message.includes("timeout");
+
+      if ((isRetryable || isDeadlock) && attempt < maxRetries - 1) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, 50 * Math.pow(2, attempt) + Math.random() * 50),
+        );
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("Transaction retries exhausted");
+};
 
 export class BattleRoomError extends Error {
   constructor(
@@ -197,12 +231,6 @@ const fillVacantPlayerSlots = async (
 };
 
 const ensureUsableRoom = async (tx: Prisma.TransactionClient, code: string) => {
-  await tx.battleRoom.deleteMany({
-    where: {
-      status: BattleRoomStatus.ENDED,
-      expiresAt: { lt: new Date() },
-    },
-  });
   const room = await tx.battleRoom.findUnique({
     where: { code },
     include: { participants: { orderBy: { joinOrder: "asc" } } },
@@ -370,6 +398,14 @@ export const createBattleRoom = async (userName: unknown, userId?: string) => {
     try {
       const created = await prisma.$transaction(async (tx) => {
         const now = new Date();
+        await tx.battleRoom
+          .deleteMany({
+            where: {
+              status: BattleRoomStatus.ENDED,
+              expiresAt: { lt: now },
+            },
+          })
+          .catch(() => {});
         const room = await tx.battleRoom.create({
           data: {
             code,
@@ -876,34 +912,40 @@ export const saveBattleSnapshot = async (
 };
 
 export const authorizeBattleResult = async (
-  code: string,
+  roomCode: string,
   sessionId: string,
   token: string,
-) =>
-  inRoomTransaction<{ participantUserId: string | null }>(async (tx) => {
-    const auth = await authenticate(tx, code, sessionId, token);
-    if (
-      "roomEndedError" in auth &&
-      auth.roomEndedError instanceof BattleRoomError
-    ) {
-      return { roomEndedError: auth.roomEndedError };
-    }
-    if (!("participant" in auth) || !auth.participant) {
-      throw new BattleRoomError(
-        "Invalid or expired session.",
-        401,
-        "INVALID_SESSION",
-      );
-    }
-    if (auth.participant.role === BattleParticipantRole.SPECTATOR) {
-      throw new BattleRoomError(
-        "Spectators cannot submit match results.",
-        403,
-        "PLAYER_REQUIRED",
-      );
-    }
-    return { participantUserId: auth.participant.userId };
+): Promise<{ participantUserId: string | null }> => {
+  const code = normalizeRoomCode(roomCode);
+  if (!code || !sessionId || !token) {
+    throw new BattleRoomError(
+      "Invalid session credentials.",
+      401,
+      "INVALID_SESSION",
+    );
+  }
+  const participant = await prisma.battleParticipant.findFirst({
+    where: {
+      sessionId,
+      room: { code },
+    },
   });
+  if (!participant || !tokenMatches(participant.tokenHash, token)) {
+    throw new BattleRoomError(
+      "Invalid or expired session.",
+      401,
+      "INVALID_SESSION",
+    );
+  }
+  if (participant.role === BattleParticipantRole.SPECTATOR) {
+    throw new BattleRoomError(
+      "Spectators cannot submit match results.",
+      403,
+      "PLAYER_REQUIRED",
+    );
+  }
+  return { participantUserId: participant.userId };
+};
 
 export const battleRoomErrorResponse = (error: unknown) => {
   if (error instanceof BattleRoomError) {

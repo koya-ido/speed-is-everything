@@ -1,4 +1,5 @@
 import { useBattleRoom } from "@/features/battle/hooks/useBattleRoom";
+import type { BattleRoomView } from "@/features/battle/utils/roomApi";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -1018,5 +1019,282 @@ describe("useBattleRoom round state synchronization", () => {
     expect(result.current.isHost).toBe(true);
 
     unmount();
+  });
+
+  it("does not rewind phase or round when receiving an older snapshot after match has finished", async () => {
+    let mockRoomView: BattleRoomView = {
+      room: {
+        code: "123-456",
+        status: "ACTIVE",
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        stateRevision: 1,
+        stateSnapshot: null,
+      },
+      participants: [
+        {
+          sessionId: "spectator-session",
+          userName: "Spectator",
+          role: "SPECTATOR",
+          joinOrder: 3,
+          isOwner: false,
+          isGameHost: false,
+          connected: true,
+        },
+      ],
+    };
+
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(mockRoomView), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result, unmount } = renderHook(() =>
+      useBattleRoom({
+        roomId: "123-456",
+        isHost: false,
+        sessionId: "spectator-session",
+        sessionToken: "spectator-token",
+        role: "SPECTATOR",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.role).toBe("SPECTATOR");
+    });
+
+    // 観戦者が試合終了通知を受信して MATCH_FINISHED に遷移
+    const matchFinishedHandler = supabaseMocks.handlers[
+      "broadcast:match_finished"
+    ] as (event: { payload: unknown }) => void;
+
+    act(() => {
+      matchFinishedHandler({
+        payload: {
+          winner: "player",
+          reason: "hp_zero",
+          playerHp: 500,
+          opponentHp: 0,
+          roundLogs: [],
+        },
+      });
+    });
+
+    expect(result.current.phase).toBe("MATCH_FINISHED");
+
+    // サーバーから過去の対戦中フェーズ（RESOLVING, round 2）のスナップショットが返ってきた場合
+    mockRoomView = {
+      room: {
+        code: "123-456",
+        status: "ACTIVE",
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        stateRevision: 10,
+        stateSnapshot: {
+          phase: "RESOLVING",
+          countdown: null,
+          currentRound: 2,
+          initialHp: 1500,
+          player: {
+            userId: "host-session",
+            userName: "Host",
+            device: "desktop",
+            hp: 800,
+            combo: 1,
+            godlikeCombo: 0,
+            isReady: true,
+          },
+          opponent: {
+            userId: "guest-session",
+            userName: "Guest",
+            device: "desktop",
+            hp: 300,
+            combo: 0,
+            godlikeCombo: 0,
+            isReady: true,
+          },
+          roundResult: null,
+          roundLogs: [],
+          matchWinner: null,
+          matchFinishReason: null,
+        },
+      },
+      participants: [
+        {
+          sessionId: "spectator-session",
+          userName: "Spectator",
+          role: "SPECTATOR",
+          joinOrder: 3,
+          isOwner: false,
+          isGameHost: false,
+          connected: true,
+        },
+      ],
+    };
+
+    // snapshot_updated ブロードキャストを受信してリフレッシュ
+    const snapshotUpdatedHandler = supabaseMocks.handlers[
+      "broadcast:snapshot_updated"
+    ] as (() => void) | undefined;
+
+    if (snapshotUpdatedHandler) {
+      act(() => {
+        snapshotUpdatedHandler();
+      });
+    }
+
+    // MATCH_FINISHED が過去の RESOLVING に巻き戻らずに維持されていることを確認
+    await waitFor(() => {
+      expect(result.current.phase).toBe("MATCH_FINISHED");
+    });
+
+    unmount();
+  });
+
+  it("prevents spectator phase regression to COUNTDOWN when a delayed snapshot arrives while in WAITING", async () => {
+    vi.useFakeTimers();
+    let mockRoomView: BattleRoomView = {
+      room: {
+        code: "123-456",
+        status: "ACTIVE",
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        stateRevision: 1,
+        stateSnapshot: null,
+      },
+      participants: [
+        {
+          sessionId: "spectator-session",
+          userName: "Spectator",
+          role: "SPECTATOR",
+          joinOrder: 3,
+          isOwner: false,
+          isGameHost: false,
+          connected: true,
+        },
+      ],
+    };
+
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(mockRoomView), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result, unmount } = renderHook(() =>
+      useBattleRoom({
+        roomId: "123-456",
+        isHost: false,
+        sessionId: "spectator-session",
+        sessionToken: "spectator-token",
+        role: "SPECTATOR",
+      }),
+    );
+
+    // 観戦者として初期化
+    expect(result.current.role).toBe("SPECTATOR");
+
+    // ホストから round_start を受信してカウントダウン開始
+    const roundStartHandler = supabaseMocks.handlers[
+      "broadcast:round_start"
+    ] as (event: { payload: unknown }) => void;
+
+    act(() => {
+      roundStartHandler({
+        payload: {
+          round: 1,
+          delay: 4000,
+          initialHp: 1500,
+          hostState: { hp: 1500, combo: 0, godlikeCombo: 0 },
+          guestState: { hp: 1500, combo: 0, godlikeCombo: 0 },
+          roundLogs: [],
+        },
+      });
+    });
+
+    expect(result.current.phase).toBe("COUNTDOWN");
+
+    // カウントダウンを進めて WAITING に到達させる
+    act(() => {
+      vi.advanceTimersByTime(2500);
+    });
+
+    expect(result.current.phase).toBe("WAITING");
+
+    // サーバーから遅れて COUNTDOWN (countdown: 2) のスナップショットが返ってきた場合
+    mockRoomView = {
+      room: {
+        code: "123-456",
+        status: "ACTIVE",
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        stateRevision: 3,
+        stateSnapshot: {
+          phase: "COUNTDOWN",
+          countdown: 2,
+          currentRound: 1,
+          initialHp: 1500,
+          player: {
+            userId: "host-session",
+            userName: "Host",
+            device: "desktop",
+            hp: 1500,
+            combo: 0,
+            godlikeCombo: 0,
+            isReady: true,
+          },
+          opponent: {
+            userId: "guest-session",
+            userName: "Guest",
+            device: "desktop",
+            hp: 1500,
+            combo: 0,
+            godlikeCombo: 0,
+            isReady: true,
+          },
+          roundResult: null,
+          roundLogs: [],
+          matchWinner: null,
+          matchFinishReason: null,
+        },
+      },
+      participants: [
+        {
+          sessionId: "spectator-session",
+          userName: "Spectator",
+          role: "SPECTATOR",
+          joinOrder: 3,
+          isOwner: false,
+          isGameHost: false,
+          connected: true,
+        },
+      ],
+    };
+
+    // snapshot_updated を受信してリフレッシュ
+    const snapshotUpdatedHandler = supabaseMocks.handlers[
+      "broadcast:snapshot_updated"
+    ] as (() => void) | undefined;
+
+    if (snapshotUpdatedHandler) {
+      await act(async () => {
+        snapshotUpdatedHandler();
+      });
+    }
+
+    // WAITING が過去の COUNTDOWN に巻き戻されず、停止もせずに維持されることを確認
+    expect(result.current.phase).toBe("WAITING");
+
+    unmount();
+    vi.useRealTimers();
   });
 });

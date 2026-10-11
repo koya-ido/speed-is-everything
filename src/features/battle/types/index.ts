@@ -174,6 +174,16 @@ export type BattlePhase =
   | "RESOLVING" // 激突演出・ダメージ反映中
   | "MATCH_FINISHED"; // 決着（勝敗決定）
 
+export const BATTLE_PHASE_ORDER: Record<BattlePhase, number> = {
+  LOBBY: 0,
+  DEVICE_WARNING: 1,
+  COUNTDOWN: 2,
+  WAITING: 3,
+  ACTION: 4,
+  RESOLVING: 5,
+  MATCH_FINISHED: 6,
+};
+
 export type RoundResolutionResult = {
   winner: "player" | "opponent" | "draw" | null;
   playerDamageTaken: number;

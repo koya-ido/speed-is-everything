@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  BATTLE_PHASE_ORDER,
   BattlePhase,
   BattlePlayerState,
   BattleRoomParticipant,
@@ -32,6 +33,7 @@ import {
   resolveRound,
 } from "@/features/battle/utils/battleLogic";
 import {
+  BattleRoomRequestError,
   BattleRoomView,
   clearBattleCredentials,
   dissolveBattleRoomRequest,
@@ -392,7 +394,7 @@ export const useBattleRoom = ({
           }
         })
         .catch((error: unknown) => {
-          console.error("Unable to record the battle result:", error);
+          console.warn("Unable to record the battle result:", error);
         });
     },
     [sessionCredentials],
@@ -424,6 +426,27 @@ export const useBattleRoom = ({
       roomId,
     };
   }, [phase, player, opponent, currentRound, initialHp, isHost, role, roomId]);
+
+  // ラウンドタイマークリア関数
+  const clearAllTimers = useCallback(() => {
+    soundManager.stopTick();
+    if (delayTimerRef.current) {
+      clearTimeout(delayTimerRef.current);
+      delayTimerRef.current = null;
+    }
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    if (resolveTimerRef.current) {
+      clearTimeout(resolveTimerRef.current);
+      resolveTimerRef.current = null;
+    }
+    if (hostPromotionTimerRef.current) {
+      clearTimeout(hostPromotionTimerRef.current);
+      hostPromotionTimerRef.current = null;
+    }
+  }, []);
 
   const applyBattleRoomView = useCallback(
     (view: BattleRoomView) => {
@@ -625,10 +648,91 @@ export const useBattleRoom = ({
                 return reverseBattleRoundLog(log);
               })
             : [];
+          const isLocalMatchFinished =
+            stateRef.current.phase === "MATCH_FINISHED";
+          const isSnapshotOngoingBattle =
+            shared.phase === "COUNTDOWN" ||
+            shared.phase === "WAITING" ||
+            shared.phase === "ACTION" ||
+            shared.phase === "RESOLVING";
+          const isLocalOngoingBattle =
+            stateRef.current.phase === "COUNTDOWN" ||
+            stateRef.current.phase === "WAITING" ||
+            stateRef.current.phase === "ACTION" ||
+            stateRef.current.phase === "RESOLVING";
+
+          // 巻き戻し防止: ローカルがすでに決着済み (MATCH_FINISHED) の場合、過去の対戦中フェーズへの巻き戻しを抑止
+          if (isLocalMatchFinished && isSnapshotOngoingBattle) {
+            stateRevisionRef.current = Math.max(
+              stateRevisionRef.current,
+              view.room.stateRevision,
+            );
+            return;
+          }
+
+          // 観戦者/プレイヤーのフェーズ巻き戻し・カウントダウン停止防止:
+          // 同一ラウンド内でローカルのフェーズがスナップショットより進んでいる場合、
+          // またはローカルでタイマー（カウントダウンやアクションディレイ）が稼働中の場合、
+          // 遅れて届いた古いスナップショットによって COUNTDOWN に巻き戻されたり停止するのを抑止する
+          const isSameRoundOngoing =
+            isLocalOngoingBattle &&
+            isSnapshotOngoingBattle &&
+            shared.currentRound === stateRef.current.currentRound;
+
+          const hasActiveLocalRoundTimer =
+            countdownTimerRef.current !== null ||
+            delayTimerRef.current !== null;
+
+          const isSnapshotRegressingPhase =
+            isSameRoundOngoing &&
+            (BATTLE_PHASE_ORDER[shared.phase] <
+              BATTLE_PHASE_ORDER[stateRef.current.phase] ||
+              (hasActiveLocalRoundTimer &&
+                (shared.phase === "COUNTDOWN" || shared.phase === "WAITING")));
+
           stateRevisionRef.current = view.room.stateRevision;
-          setPhase(shared.phase);
-          setCountdown(shared.countdown ?? null);
+
+          if (!isSnapshotRegressingPhase) {
+            if (
+              shared.phase === "RESOLVING" ||
+              shared.phase === "MATCH_FINISHED"
+            ) {
+              clearAllTimers();
+            }
+            setPhase(shared.phase);
+            stateRef.current.phase = shared.phase;
+
+            // スナップショット適用時に COUNTDOWN の場合、ローカルタイマーが未起動であればフリーズ防止タイマーを開始
+            if (shared.phase === "COUNTDOWN") {
+              const startCount =
+                typeof shared.countdown === "number" && shared.countdown > 0
+                  ? shared.countdown
+                  : 3;
+              setCountdown(startCount);
+              if (!countdownTimerRef.current) {
+                let count = startCount;
+                countdownTimerRef.current = setInterval(() => {
+                  count -= 1;
+                  if (count > 0) {
+                    setCountdown(count);
+                  } else {
+                    if (countdownTimerRef.current) {
+                      clearInterval(countdownTimerRef.current);
+                      countdownTimerRef.current = null;
+                    }
+                    setCountdown(null);
+                    setPhase("WAITING");
+                    stateRef.current.phase = "WAITING";
+                  }
+                }, 800);
+              }
+            } else {
+              setCountdown(shared.countdown ?? null);
+            }
+          }
+
           setCurrentRound(shared.currentRound);
+          stateRef.current.currentRound = shared.currentRound;
           setInitialHp(shared.initialHp);
           if (restoredPlayer) setPlayer(restoredPlayer);
           setOpponent(restoredOpponent);
@@ -645,7 +749,7 @@ export const useBattleRoom = ({
         }
       }
     },
-    [detectedDevice, localSessionId],
+    [clearAllTimers, detectedDevice, localSessionId],
   );
 
   useEffect(() => {
@@ -671,23 +775,14 @@ export const useBattleRoom = ({
       : opponent && player.device !== opponent.device,
   );
 
-  // ラウンドタイマークリア関数
-  const clearAllTimers = useCallback(() => {
-    soundManager.stopTick();
-    if (delayTimerRef.current) clearTimeout(delayTimerRef.current);
-    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
-    if (resolveTimerRef.current) clearTimeout(resolveTimerRef.current);
-    if (hostPromotionTimerRef.current) {
-      clearTimeout(hostPromotionTimerRef.current);
-      hostPromotionTimerRef.current = null;
-    }
-  }, []);
-
   useEffect(() => {
     if (!sessionCredentials || roomEnded || sessionExpired) return;
     let cancelled = false;
     let loggedError = false;
+    let isRefreshing = false;
     const refresh = async () => {
+      if (isRefreshing || cancelled) return;
+      isRefreshing = true;
       try {
         const response = await sendBattleSessionRequest(
           roomId,
@@ -743,17 +838,50 @@ export const useBattleRoom = ({
           console.error("Battle room heartbeat failed:", error);
           loggedError = true;
         }
+      } finally {
+        isRefreshing = false;
       }
     };
     refreshRoomRef.current = refresh;
     heartbeatTimerRef.current = setInterval(() => void refresh(), 5000);
     void refresh();
+
+    const handleVisibilityOrFocus = () => {
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState === "visible"
+      ) {
+        void refresh();
+      }
+    };
+    const handleOnline = () => {
+      void refresh();
+    };
+
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleVisibilityOrFocus);
+    }
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", handleVisibilityOrFocus);
+      window.addEventListener("online", handleOnline);
+    }
+
     return () => {
       cancelled = true;
       refreshRoomRef.current = null;
       if (heartbeatTimerRef.current) {
         clearInterval(heartbeatTimerRef.current);
         heartbeatTimerRef.current = null;
+      }
+      if (typeof document !== "undefined") {
+        document.removeEventListener(
+          "visibilitychange",
+          handleVisibilityOrFocus,
+        );
+      }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", handleVisibilityOrFocus);
+        window.removeEventListener("online", handleOnline);
       }
     };
   }, [
@@ -770,7 +898,9 @@ export const useBattleRoom = ({
       !sessionCredentials ||
       !roomReady ||
       !isHost ||
+      !stateRef.current.isHost ||
       role === "SPECTATOR" ||
+      stateRef.current.role === "SPECTATOR" ||
       roomEnded
     ) {
       return;
@@ -782,7 +912,7 @@ export const useBattleRoom = ({
       publisherSessionId: localSessionId,
       clientSequence: snapshotSequenceRef.current,
       phase,
-      countdown,
+      countdown: phase === "COUNTDOWN" ? countdown : null,
       currentRound,
       initialHp,
       player,
@@ -808,14 +938,25 @@ export const useBattleRoom = ({
         }
       },
       (error: unknown) => {
+        if (
+          error instanceof BattleRoomRequestError &&
+          (error.status === 403 || error.code === "GAME_HOST_REQUIRED")
+        ) {
+          // 既にホスト権限が移譲または降格されているため、静かにローカル状態を同期
+          if (!cancelled) {
+            setIsHost(false);
+            stateRef.current.isHost = false;
+          }
+          return;
+        }
         console.error("Unable to publish the battle snapshot:", error);
       },
     );
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- countdown changes on every 800ms tick; snapshot publishing is triggered by phase and structural changes
   }, [
-    countdown,
     currentRound,
     initialHp,
     isHost,
@@ -834,9 +975,10 @@ export const useBattleRoom = ({
     sessionCredentials,
   ]);
 
-  // ホストへの昇格処理（ロビーでホスト退出時）
+  // ホストへの昇格処理（ロビーでホスト退出時、アクティブプレイヤーのみ昇格可能）
   const promoteSelfToHost = useCallback(() => {
-    if (stateRef.current.isHost) return;
+    if (stateRef.current.isHost || stateRef.current.role === "SPECTATOR")
+      return;
     setIsHost(true);
     setPromotedToHost(true);
     // eslint-disable-next-line react-hooks/immutability -- 昇格直後の非同期処理で最新ホスト状態を読むため
@@ -1016,8 +1158,10 @@ export const useBattleRoom = ({
           setCountdown(count);
           soundManager.playCountdown();
         } else {
-          if (countdownTimerRef.current)
+          if (countdownTimerRef.current) {
             clearInterval(countdownTimerRef.current);
+            countdownTimerRef.current = null;
+          }
           setCountdown(null);
 
           // WAITINGフェーズ（赤画面）
@@ -1028,6 +1172,7 @@ export const useBattleRoom = ({
           // 指定された delay 後に ACTION フェーズ（緑画面）へ移行
           // GameCanvas と同一の rAF 計測起点同期と Tick サウンド
           delayTimerRef.current = setTimeout(() => {
+            delayTimerRef.current = null;
             actionStartTimeRef.current = performance.now();
             requestAnimationFrame((timestamp) => {
               actionStartTimeRef.current = timestamp;
@@ -1181,6 +1326,8 @@ export const useBattleRoom = ({
       }
       evaluatedRoundRef.current = stateRef.current.currentRound;
 
+      clearAllTimers();
+      setCountdown(null);
       setPhase("RESOLVING");
       // eslint-disable-next-line react-hooks/immutability -- 重複する結果通知を同一ラウンド内で遮断するため
       stateRef.current.phase = "RESOLVING";
@@ -1349,7 +1496,7 @@ export const useBattleRoom = ({
         }
       }, resolveDelay);
     },
-    [recordMatchResult, triggerNextRound],
+    [clearAllTimers, recordMatchResult, triggerNextRound],
   );
 
   // 2. タップ/クリック判定
@@ -1910,12 +2057,21 @@ export const useBattleRoom = ({
 
   const rotateToSpectator = useCallback(async () => {
     if (!sessionCredentials || stateRef.current.role === "SPECTATOR") return;
-    const view = await rotateBattleParticipantRequest(
-      roomId,
-      sessionCredentials,
-    );
-    applyBattleRoomView(view);
-    resetToLobbyState();
+    stateRef.current.isHost = false;
+    stateRef.current.role = "SPECTATOR";
+    setIsHost(false);
+    setRole("SPECTATOR");
+    try {
+      const view = await rotateBattleParticipantRequest(
+        roomId,
+        sessionCredentials,
+      );
+      applyBattleRoomView(view);
+      resetToLobbyState();
+    } catch (error) {
+      console.error("Unable to join the spectator queue:", error);
+      throw error;
+    }
   }, [applyBattleRoomView, resetToLobbyState, roomId, sessionCredentials]);
 
   const returnToLobby = useCallback(() => {
@@ -2053,7 +2209,7 @@ export const useBattleRoom = ({
                   sawOpponentRef.current = false;
                   promoteSelfToHost();
                 }
-              }, 1500);
+              }, 3500);
             }
           }
         } else if (stateRef.current.phase === "MATCH_FINISHED") {
@@ -2064,8 +2220,7 @@ export const useBattleRoom = ({
               if (stateRef.current.phase !== "MATCH_FINISHED") return;
               opponentDisconnectedFromResultRef.current = true;
               setOpponentReturnedToLobby(true);
-              if (!stateRef.current.isHost) promoteSelfToHost();
-            }, 1500);
+            }, 3500);
           }
         } else {
           // 対戦中の切断判定

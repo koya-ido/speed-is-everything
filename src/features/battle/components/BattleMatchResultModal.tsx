@@ -113,15 +113,14 @@ export const BattleMatchResultModal = ({
       <div className="glass-panel p-6 md:p-10 rounded-3xl max-w-lg w-full border border-gray-700 shadow-[0_0_50px_rgba(0,0,0,0.8)] flex flex-col items-center gap-6 text-center animate-in zoom-in-95">
         <div className="flex flex-col items-center gap-2">
           <span
-            className={`text-4xl md:text-6xl font-cyber font-black ${
-              isSpectator
+            className={`text-4xl md:text-6xl font-cyber font-black ${isSpectator
                 ? "text-[#00f3ff] drop-shadow-[0_0_30px_rgba(0,243,255,0.6)]"
                 : winner === "player"
                   ? "text-transparent bg-clip-text bg-linear-to-r from-[#00ff66] via-yellow-300 to-[#00f3ff] drop-shadow-[0_0_30px_rgba(0,255,102,0.8)]"
                   : winner === "opponent"
                     ? "text-[#ff0055] drop-shadow-[0_0_30px_rgba(255,0,85,0.8)]"
                     : "text-gray-300"
-            }`}
+              }`}
           >
             {isSpectator
               ? t("match_result")
@@ -132,13 +131,12 @@ export const BattleMatchResultModal = ({
                   : t("match_draw")}
           </span>
           <span
-            className={`text-sm font-mono ${
-              winner === "player"
+            className={`text-sm font-mono ${winner === "player"
                 ? "text-[#00ff66]"
                 : winner === "opponent"
                   ? "text-[#ff0055]"
                   : "text-gray-400"
-            }`}
+              }`}
           >
             {isSpectator ? spectatorResultDescription : resultDescription}
           </span>
@@ -148,13 +146,12 @@ export const BattleMatchResultModal = ({
           <div className="flex flex-col gap-1">
             {isSpectator && winner && (
               <span
-                className={`text-center text-[10px] font-bold tracking-widest ${
-                  winner === "draw"
+                className={`text-center text-[10px] font-bold tracking-widest ${winner === "draw"
                     ? "text-gray-300"
                     : winner === "player"
                       ? "text-[#00ff66]"
                       : "text-[#ff0055]"
-                }`}
+                  }`}
               >
                 {winner === "draw"
                   ? t("match_draw")
@@ -170,7 +167,9 @@ export const BattleMatchResultModal = ({
                 {isSpectator ? player.userName : t("match_you")}
               </span>
               <span className={`text-sm font-bold ${playerHpClass}`}>
-                {t("match_hp", { hp: playerHp.toFixed(1) })}
+                {t("match_hp", {
+                  hp: Number.isFinite(playerHp) ? playerHp.toFixed(1) : "0.0",
+                })}
               </span>
               <span className="text-gray-400">
                 {t("match_max_combo", { combo: player.combo })}
@@ -180,13 +179,12 @@ export const BattleMatchResultModal = ({
           <div className="flex flex-col gap-1">
             {isSpectator && winner && (
               <span
-                className={`text-center text-[10px] font-bold tracking-widest ${
-                  winner === "draw"
+                className={`text-center text-[10px] font-bold tracking-widest ${winner === "draw"
                     ? "text-gray-300"
                     : winner === "opponent"
                       ? "text-[#00ff66]"
                       : "text-[#ff0055]"
-                }`}
+                  }`}
               >
                 {winner === "draw"
                   ? t("match_draw")
@@ -205,7 +203,10 @@ export const BattleMatchResultModal = ({
               </span>
               <span className={`text-sm font-bold ${opponentHpClass}`}>
                 {t("match_hp", {
-                  hp: opponent ? opponent.hp.toFixed(1) : "0.0",
+                  hp:
+                    opponent && Number.isFinite(opponent.hp)
+                      ? opponent.hp.toFixed(1)
+                      : "0.0",
                 })}
               </span>
               <span className="text-gray-400">
@@ -255,11 +256,10 @@ export const BattleMatchResultModal = ({
                 type="button"
                 disabled={rematchRequestedByMe}
                 onClick={onRequestRematch}
-                className={`w-full py-4 rounded-xl font-cyber font-bold text-lg tracking-wider flex items-center justify-center gap-2 transition-all ${
-                  rematchRequestedByMe
+                className={`w-full py-4 rounded-xl font-cyber font-bold text-lg tracking-wider flex items-center justify-center gap-2 transition-all ${rematchRequestedByMe
                     ? "bg-gray-800 text-gray-400 border border-gray-700 cursor-not-allowed"
                     : "bg-[#00f3ff] hover:bg-[#33f6ff] text-black shadow-[0_0_25px_rgba(0,243,255,0.6)] active:scale-95 cursor-pointer"
-                }`}
+                  }`}
               >
                 <RotateCcw className="w-5 h-5" />
                 {rematchLabel}
@@ -269,11 +269,10 @@ export const BattleMatchResultModal = ({
           <button
             type="button"
             onClick={onReturnToLobby}
-            className={`w-full py-3.5 rounded-xl border font-mono text-sm tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer shadow-[0_0_15px_rgba(0,0,0,0.5)] active:scale-95 ${
-              opponentReturnedToLobby && rematchRequestedByMe
+            className={`w-full py-3.5 rounded-xl border font-mono text-sm tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer shadow-[0_0_15px_rgba(0,0,0,0.5)] active:scale-95 ${opponentReturnedToLobby && rematchRequestedByMe
                 ? "border-[#00ff66] bg-[#00ff66]/20 text-[#00ff66] hover:bg-[#00ff66]/30 shadow-[0_0_25px_rgba(0,255,102,0.4)] animate-pulse font-bold"
                 : "border-gray-700 hover:border-[#00f3ff]/50 bg-black/40 hover:bg-[#00f3ff]/10 text-gray-300 hover:text-[#00f3ff]"
-            }`}
+              }`}
           >
             <Users className="w-4 h-4" />
             <span>{t(isSpectator ? "exit_match" : "match_return_lobby")}</span>

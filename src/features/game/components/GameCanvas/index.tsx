@@ -447,9 +447,13 @@ export const GameCanvas = () => {
         lastReaction !== null
           ? getReactionRank(lastReaction, deviceType)
           : "NORMAL";
+      const reactionText =
+        lastReaction != null && Number.isFinite(lastReaction)
+          ? `-${lastReaction.toFixed(1)}ms`
+          : "-";
       if (rank === "GODLIKE") {
         bgEffect = "bg-[#050505] shadow-[inset_0_0_300px_rgba(255,215,0,0.4)]";
-        text = `-${lastReaction?.toFixed(1)}ms`;
+        text = reactionText;
         textColor = "text-[#ffd700]";
         textShadow = "drop-shadow-[0_0_30px_rgba(255,215,0,1)]";
         ringColor = "stroke-[#ffd700]";
@@ -457,14 +461,14 @@ export const GameCanvas = () => {
       } else if (rank === "EXCELLENT") {
         bgEffect =
           "bg-[#050505] shadow-[inset_0_0_200px_rgba(255,100,255,0.3)]";
-        text = `-${lastReaction?.toFixed(1)}ms`;
+        text = reactionText;
         textColor = "text-[#ff64ff]";
         textShadow = "drop-shadow-[0_0_20px_rgba(255,100,255,0.9)]";
         ringColor = "stroke-[#ff64ff]";
         ringGlow = "drop-shadow-[0_0_15px_rgba(255,100,255,0.9)]";
       } else {
         bgEffect = "bg-[#050505] shadow-[inset_0_0_150px_rgba(0,243,255,0.15)]";
-        text = `-${lastReaction?.toFixed(1)}ms`;
+        text = reactionText;
         textColor = "text-[#00f3ff]";
         textShadow = "drop-shadow-[0_0_15px_rgba(0,243,255,0.8)]";
         ringColor = "stroke-[#00f3ff]";

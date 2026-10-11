@@ -5,13 +5,15 @@ import {
   roleForJoin,
   selectNextGameHost,
   selectVacantPlayerRole,
+  SESSION_ONLINE_MS,
 } from "@/features/battle/server/rooms";
 import { BattleParticipantRole } from "@/generated/prisma/client";
 import { describe, expect, it } from "vitest";
 
 describe("battle room validation", () => {
-  it("keeps disconnected room sessions for three minutes", () => {
+  it("keeps disconnected room sessions for three minutes and active sessions for 60 seconds", () => {
     expect(RECONNECT_GRACE_MS).toBe(3 * 60 * 1000);
+    expect(SESSION_ONLINE_MS).toBe(60 * 1000);
   });
 
   it("normalizes the existing six-digit room code format", () => {
@@ -109,7 +111,7 @@ describe("battle room validation", () => {
       role: BattleParticipantRole.PLAYER_2,
       isGameHost: false,
       joinOrder: 2,
-      lastSeenAt: new Date(now.getTime() - 16_000),
+      lastSeenAt: new Date(now.getTime() - 61_000),
     };
     const promotedSpectator = {
       role: BattleParticipantRole.PLAYER_1,

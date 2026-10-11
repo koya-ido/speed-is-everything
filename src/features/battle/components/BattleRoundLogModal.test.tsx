@@ -96,4 +96,38 @@ describe("BattleRoundLogModal", () => {
     expect(screen.getByText("あなたの残HP: 1500.0")).toBeInTheDocument();
     expect(screen.getByText("相手の残HP: 1400.0")).toBeInTheDocument();
   });
+
+  it("safely formats foul and unacted player times without displaying undefined", () => {
+    render(
+      <BattleRoundLogModal
+        isOpen
+        isSpectator={false}
+        playerName="Player 1"
+        opponentName="Player 2"
+        logs={[
+          {
+            round: 1,
+            winner: "player",
+            playerTime: null,
+            playerRank: null,
+            playerFoul: null,
+            playerComboBefore: 0,
+            opponentTime: null,
+            opponentRank: null,
+            opponentFoul: "early_click",
+            opponentComboBefore: 0,
+            damage: 1500,
+            playerHpAfter: 1500,
+            opponentHpAfter: 0,
+          },
+        ]}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // Opponent fouled early, local player has null time -> formatted as "-"
+    expect(screen.getByText("log_foul_early")).toBeInTheDocument();
+    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.queryByText(/undefined/i)).not.toBeInTheDocument();
+  });
 });

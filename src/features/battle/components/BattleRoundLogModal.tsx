@@ -28,8 +28,8 @@ export const BattleRoundLogModal = ({
   const formatFoul = (foul: BattleRoundLog["playerFoul"]) =>
     foul === "early_click" ? t("log_foul_early") : t("log_foul_invalid");
 
-  const formatTime = (time: number | null) =>
-    time === null ? "-" : `${time.toFixed(1)}ms`;
+  const formatTime = (time: number | null | undefined) =>
+    time == null || !Number.isFinite(time) ? "-" : `${time.toFixed(1)}ms`;
 
   return (
     <div className="fixed inset-0 z-60 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in">
@@ -86,10 +86,10 @@ export const BattleRoundLogModal = ({
                 <div
                   key={log.round}
                   className={`p-3.5 rounded-xl border bg-black/60 transition-all ${isPlayerWin
-                      ? "border-[#00f3ff]/40 shadow-[0_0_12px_rgba(0,243,255,0.1)]"
-                      : isOpponentWin
-                        ? "border-[#ff0055]/40 shadow-[0_0_12px_rgba(255,0,85,0.1)]"
-                        : "border-gray-700/60"
+                    ? "border-[#00f3ff]/40 shadow-[0_0_12px_rgba(0,243,255,0.1)]"
+                    : isOpponentWin
+                      ? "border-[#ff0055]/40 shadow-[0_0_12px_rgba(255,0,85,0.1)]"
+                      : "border-gray-700/60"
                     }`}
                 >
                   <div className="flex items-center justify-between pb-2 mb-2 border-b border-gray-800/80">
@@ -101,10 +101,10 @@ export const BattleRoundLogModal = ({
                     </span>
                     <span
                       className={`text-xs font-cyber font-bold px-2 py-0.5 rounded-full ${isPlayerWin
-                          ? "bg-[#00f3ff]/20 text-[#00f3ff] border border-[#00f3ff]/40"
-                          : isOpponentWin
-                            ? "bg-[#ff0055]/20 text-[#ff0055] border border-[#ff0055]/40"
-                            : "bg-gray-700/50 text-gray-300 border border-gray-600"
+                        ? "bg-[#00f3ff]/20 text-[#00f3ff] border border-[#00f3ff]/40"
+                        : isOpponentWin
+                          ? "bg-[#ff0055]/20 text-[#ff0055] border border-[#ff0055]/40"
+                          : "bg-gray-700/50 text-gray-300 border border-gray-600"
                         }`}
                     >
                       {isSpectator && !isRoundDraw
@@ -127,8 +127,8 @@ export const BattleRoundLogModal = ({
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span
                           className={`font-bold font-mono ${log.playerFoul
-                              ? "text-red-400 text-[11px]"
-                              : "text-white text-sm"
+                            ? "text-red-400 text-[11px]"
+                            : "text-white text-sm"
                             }`}
                         >
                           {log.playerFoul
@@ -138,10 +138,10 @@ export const BattleRoundLogModal = ({
                         {log.playerRank && !log.playerFoul && (
                           <span
                             className={`text-[9px] px-1.5 py-0.5 rounded font-cyber font-bold ${log.playerRank === "GODLIKE"
-                                ? "bg-yellow-500/20 text-yellow-300 border border-yellow-400/40"
-                                : log.playerRank === "EXCELLENT"
-                                  ? "bg-purple-500/20 text-purple-300 border border-purple-400/40"
-                                  : "bg-blue-500/20 text-blue-300 border border-blue-400/40"
+                              ? "bg-yellow-500/20 text-yellow-300 border border-yellow-400/40"
+                              : log.playerRank === "EXCELLENT"
+                                ? "bg-purple-500/20 text-purple-300 border border-purple-400/40"
+                                : "bg-blue-500/20 text-blue-300 border border-blue-400/40"
                               }`}
                           >
                             {log.playerRank}
@@ -172,10 +172,10 @@ export const BattleRoundLogModal = ({
                         {log.opponentRank && !log.opponentFoul && (
                           <span
                             className={`text-[9px] px-1.5 py-0.5 rounded font-cyber font-bold ${log.opponentRank === "GODLIKE"
-                                ? "bg-yellow-500/20 text-yellow-300 border border-yellow-400/40"
-                                : log.opponentRank === "EXCELLENT"
-                                  ? "bg-purple-500/20 text-purple-300 border border-purple-400/40"
-                                  : "bg-blue-500/20 text-blue-300 border border-blue-400/40"
+                              ? "bg-yellow-500/20 text-yellow-300 border border-yellow-400/40"
+                              : log.opponentRank === "EXCELLENT"
+                                ? "bg-purple-500/20 text-purple-300 border border-purple-400/40"
+                                : "bg-blue-500/20 text-blue-300 border border-blue-400/40"
                               }`}
                           >
                             {log.opponentRank}
@@ -183,8 +183,8 @@ export const BattleRoundLogModal = ({
                         )}
                         <span
                           className={`font-bold font-mono ${log.opponentFoul
-                              ? "text-red-400 text-[11px]"
-                              : "text-white text-sm"
+                            ? "text-red-400 text-[11px]"
+                            : "text-white text-sm"
                             }`}
                         >
                           {log.opponentFoul
@@ -207,8 +207,10 @@ export const BattleRoundLogModal = ({
                         <span>
                           {t("log_difference")}:{" "}
                           <span className="text-white font-bold">
-                            {log.playerTime !== null &&
-                              log.opponentTime !== null
+                            {log.playerTime != null &&
+                              log.opponentTime != null &&
+                              Number.isFinite(log.playerTime) &&
+                              Number.isFinite(log.opponentTime)
                               ? Math.abs(
                                 log.playerTime - log.opponentTime,
                               ).toFixed(1)
@@ -226,8 +228,8 @@ export const BattleRoundLogModal = ({
                         {log.appliedComboMult && log.appliedComboMult > 1 && (
                           <span
                             className={`font-bold ${log.appliedBonusType === "GODLIKE"
-                                ? "text-yellow-400"
-                                : "text-emerald-400"
+                              ? "text-yellow-400"
+                              : "text-emerald-400"
                               }`}
                           >
                             {t("log_combo_multiplier", {
@@ -261,20 +263,28 @@ export const BattleRoundLogModal = ({
                       {isSpectator
                         ? t("log_spectator_player_hp", {
                           name: playerName || t("player_one"),
-                          hp: log.playerHpAfter.toFixed(1),
+                          hp: Number.isFinite(log.playerHpAfter)
+                            ? log.playerHpAfter.toFixed(1)
+                            : "0.0",
                         })
                         : t("log_player_hp", {
-                          hp: log.playerHpAfter.toFixed(1),
+                          hp: Number.isFinite(log.playerHpAfter)
+                            ? log.playerHpAfter.toFixed(1)
+                            : "0.0",
                         })}
                     </span>
                     <span>
                       {isSpectator
                         ? t("log_spectator_opponent_hp", {
                           name: opponentName || t("player_two"),
-                          hp: log.opponentHpAfter.toFixed(1),
+                          hp: Number.isFinite(log.opponentHpAfter)
+                            ? log.opponentHpAfter.toFixed(1)
+                            : "0.0",
                         })
                         : t("log_opponent_hp", {
-                          hp: log.opponentHpAfter.toFixed(1),
+                          hp: Number.isFinite(log.opponentHpAfter)
+                            ? log.opponentHpAfter.toFixed(1)
+                            : "0.0",
                         })}
                     </span>
                   </div>

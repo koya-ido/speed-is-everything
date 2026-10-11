@@ -397,10 +397,10 @@ export const BattleArena = ({
         e.preventDefault();
       }
 
-      // 防御: 自動化スクリプト等による合成イベント (dispatchEvent) を拒否
+      // 防御: 本番環境では自動化スクリプト等による合成イベント (dispatchEvent) を拒否
       const rawEvent = "nativeEvent" in e ? e.nativeEvent : e;
       if (
-        process.env.NODE_ENV !== "test" &&
+        process.env.NODE_ENV === "production" &&
         typeof window !== "undefined" &&
         "isTrusted" in rawEvent &&
         !rawEvent.isTrusted
@@ -457,6 +457,17 @@ export const BattleArena = ({
     window.addEventListener("keydown", handleKeyDown, { passive: false });
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [phase, triggerUserAction]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") {
+      (window as unknown as { __battleTap?: () => void }).__battleTap = () => {
+        triggerUserAction({ type: "pointerdown" } as React.SyntheticEvent);
+      };
+    }
+    return () => {
+      delete (window as unknown as { __battleTap?: () => void }).__battleTap;
+    };
+  }, [triggerUserAction]);
 
   // スクロール制御は画面状態に合わせて切り替える
   useEffect(() => {
@@ -2354,7 +2365,10 @@ export const BattleArena = ({
                       <span className="font-mono text-3xl md:text-4xl font-bold text-[#00f3ff] drop-shadow-[0_0_15px_rgba(0,243,255,0.8)]">
                         {player.currentRoundFoul
                           ? t("hud_foul")
-                          : `${player.currentRoundTime?.toFixed(1)}`}
+                          : player.currentRoundTime != null &&
+                            Number.isFinite(player.currentRoundTime)
+                            ? `${player.currentRoundTime.toFixed(1)}`
+                            : "-"}
                       </span>
                       <div className="flex items-center gap-1.5 text-xs text-[#00f3ff] mt-1 font-mono">
                         <div className="w-3 h-3 rounded-full border border-[#00f3ff] border-t-transparent animate-spin" />
@@ -2387,12 +2401,46 @@ export const BattleArena = ({
                     <span
                       className={`font-mono text-3xl md:text-4xl font-bold ${textColor} ${textShadow}`}
                     >
-                      {player.currentRoundFoul
-                        ? t("hud_foul")
-                        : `-${player.currentRoundTime?.toFixed(1)}`}
+                      {role === "SPECTATOR"
+                        ? player.currentRoundFoul || opponent?.currentRoundFoul
+                          ? t("hud_foul")
+                          : player.currentRoundTime != null &&
+                            Number.isFinite(player.currentRoundTime)
+                            ? `-${player.currentRoundTime.toFixed(1)}`
+                            : "-"
+                        : player.currentRoundFoul
+                          ? t("hud_foul")
+                          : player.currentRoundTime != null &&
+                            Number.isFinite(player.currentRoundTime)
+                            ? `-${player.currentRoundTime.toFixed(1)}`
+                            : opponent?.currentRoundFoul
+                              ? t("hud_foul")
+                              : "-"}
                     </span>
                     <span className="text-gray-500 font-cyber text-[10px] mt-1">
-                      {player.currentRoundRank || "MS"}
+                      {role === "SPECTATOR"
+                        ? player.currentRoundFoul && opponent?.currentRoundFoul
+                          ? t("state_draw")
+                          : player.currentRoundFoul
+                            ? activePlayerNames.playerOneName || t("player_one")
+                            : opponent?.currentRoundFoul
+                              ? activePlayerNames.playerTwoName || t("player_two")
+                              : player.currentRoundRank ||
+                              (player.currentRoundTime != null &&
+                                Number.isFinite(player.currentRoundTime)
+                                ? "MS"
+                                : "-")
+                        : player.currentRoundFoul
+                          ? player.currentRoundFoul === "early_click"
+                            ? t("log_foul_early")
+                            : t("log_foul_invalid")
+                          : opponent?.currentRoundFoul
+                            ? opponent.userName || t("log_opponent")
+                            : player.currentRoundRank ||
+                            (player.currentRoundTime != null &&
+                              Number.isFinite(player.currentRoundTime)
+                              ? "MS"
+                              : "-")}
                     </span>
                   </div>
                 )}
